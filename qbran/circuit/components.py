@@ -9,6 +9,7 @@ import scipy.sparse as sp
 from qbran.core.operators import (
     charge_operator,
     cos_phi_operator,
+    sin_phi_operator,
     annihilation_operator,
     creation_operator,
     number_operator,
@@ -77,6 +78,7 @@ class Transmon(Component):
         """Diagonalize the transmon Hamiltonian in the charge basis."""
         n_op = charge_operator(self.ncut, sparse=False)
         cos_op = cos_phi_operator(self.ncut, sparse=False)
+        sin_op = sin_phi_operator(self.ncut, sparse=False)
 
         H_charge = 4.0 * self.EC * (n_op - self.ng * np.eye(self.charge_dim)) ** 2 - self.EJ * cos_op
         evals, evecs = np.linalg.eigh(H_charge)
@@ -88,6 +90,7 @@ class Transmon(Component):
         # Project operators to the truncated eigenbasis: O_eig = evecs^T @ O @ evecs
         self._n_eig = self._evecs.T @ n_op @ self._evecs
         self._cos_phi_eig = self._evecs.T @ cos_op @ self._evecs
+        self._sin_phi_eig = self._evecs.T @ sin_op @ self._evecs
 
     @property
     def wp(self) -> float:
@@ -108,6 +111,16 @@ class Transmon(Component):
     def n_operator(self) -> np.ndarray:
         """Charge number operator in the truncated eigenbasis."""
         return self._n_eig
+
+    @property
+    def cos_phi_operator(self) -> np.ndarray:
+        """Cosine of phase operator in the truncated eigenbasis."""
+        return self._cos_phi_eig
+
+    @property
+    def sin_phi_operator(self) -> np.ndarray:
+        """Sine of phase operator in the truncated eigenbasis."""
+        return self._sin_phi_eig
 
     def bare_hamiltonian(self, sparse: bool = False) -> Union[np.ndarray, sp.csr_matrix]:
         """Return the bare Hamiltonian of the transmon in the truncated eigenbasis."""
