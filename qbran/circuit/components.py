@@ -83,6 +83,12 @@ class Transmon(Component):
         H_charge = 4.0 * self.EC * (n_op - self.ng * np.eye(self.charge_dim)) ** 2 - self.EJ * cos_op
         evals, evecs = np.linalg.eigh(H_charge)
 
+        # Enforce canonical sign convention (first non-zero element positive)
+        for i in range(self.charge_dim):
+            idx_max = np.argmax(np.abs(evecs[:, i]))
+            if evecs[idx_max, i] < 0:
+                evecs[:, i] *= -1.0
+
         self._all_evals = evals
         self._evecs = evecs[:, :self.truncated_dim]
         self.evals = evals[:self.truncated_dim]
@@ -90,7 +96,7 @@ class Transmon(Component):
         # Project operators to the truncated eigenbasis: O_eig = evecs^T @ O @ evecs
         self._n_eig = self._evecs.T @ n_op @ self._evecs
         self._cos_phi_eig = self._evecs.T @ cos_op @ self._evecs
-        self._sin_phi_eig = self._evecs.T @ sin_op @ self._evecs
+        self._sin_phi_eig = (self._evecs.T @ sin_op.imag @ self._evecs) * 1j
 
     @property
     def wp(self) -> float:
@@ -152,40 +158,40 @@ class Resonator(Component):
     def bare_hamiltonian(self, sparse: bool = False) -> Union[np.ndarray, sp.csr_matrix]:
         diag = self.E_osc * np.arange(self.truncated_dim, dtype=np.float64)
         if sparse:
-            return sp.diags(diag, 0, format='csr', dtype=np.float64)
+            return sp.diags(diag, 0, format="csr", dtype=np.float64)
         return np.diag(diag)
 
     def annihilation_operator(self, sparse: bool = False) -> Union[np.ndarray, sp.csr_matrix]:
-        """Return the annihilation operator in the truncated Fock basis."""
+        """Annihilation operator in Fock basis."""
         return annihilation_operator(self.truncated_dim, sparse=sparse)
 
     def creation_operator(self, sparse: bool = False) -> Union[np.ndarray, sp.csr_matrix]:
-        """Return the creation operator in the truncated Fock basis."""
+        """Creation operator in Fock basis."""
         return creation_operator(self.truncated_dim, sparse=sparse)
 
     @property
     def a(self) -> np.ndarray:
-        """Annihilation operator in the truncated Fock basis."""
-        return self.annihilation_operator(sparse=False)
+        """Annihilation operator in Fock basis (float64)."""
+        return annihilation_operator(self.truncated_dim, sparse=False)
 
     @property
     def adag(self) -> np.ndarray:
-        """Creation operator in the truncated Fock basis."""
-        return self.creation_operator(sparse=False)
+        """Creation operator in Fock basis (float64)."""
+        return creation_operator(self.truncated_dim, sparse=False)
 
     @property
-    def n(self) -> np.ndarray:
-        """Number operator in the truncated Fock basis."""
+    def n_photons_operator(self) -> np.ndarray:
+        """Photon number operator in Fock basis (float64)."""
         return number_operator(self.truncated_dim, sparse=False)
 
     @property
-    def x(self) -> np.ndarray:
-        """Quadrature operator x = (a + a^dagger) / sqrt(2) in the truncated Fock basis."""
+    def x_operator(self) -> np.ndarray:
+        """Position quadrature (a + adag) / sqrt(2)."""
         return quadrature_x(self.truncated_dim, sparse=False)
 
     @property
-    def p(self) -> np.ndarray:
-        """Quadrature operator p = (a - a^dagger) / (i * sqrt(2)) in the truncated Fock basis."""
-        return quadrature_p(self.truncated_dim, sparse=False)
+    def p_operator(self) -> np.ndarray:
+        """Momentum quadrature (gauge-rotated or standard)."""
+        return quadrature_p(self.truncated_dim, sparse=False, real_gauge=False)
 
 Oscillator = Resonator  # Alias

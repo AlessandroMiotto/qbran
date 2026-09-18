@@ -35,51 +35,57 @@ class Interaction:
         op2: Optional[np.ndarray] = None
     ):
         self.g = float(g)
-        self.component1 = component1
-        self.component2 = component2
+        self.subsys1 = component1
+        self.subsys2 = component2
         self.kind = kind.lower()
-        self.op1 = op1
-        self.op2 = op2
+        self.custom_op1 = op1
+        self.custom_op2 = op2
 
     def get_operator(self) -> Tuple[np.ndarray, np.ndarray, float]:
         """Return the interaction operator for the two components."""
-        if self.kind == 'custom':
-            if self.op1 is None or self.op2 is None:
-                raise ValueError("kind='custom' requires both op1 and op2 to be provided.")
-            return self.op1, self.op2, self.g
+        if self.kind == "custom":
+            if self.custom_op1 is None or self.custom_op2 is None:
+                raise ValueError("kind='custom' requires op1 and op2 to be provided.")
+            return self.custom_op1, self.custom_op2, self.g
 
         # Transmon <-> Resonator
-        if isinstance(self.component1, Transmon) and isinstance(self.component2, Resonator):
-            if self.kind == 'capacitive':
-                self.op1 = self.component1.n_operator
-                self.op2 = -1j * (self.component2.a - self.component2.adag)
-                return self.op1, self.op2, self.g
-            elif self.kind == 'inductive':
-                self.op1 = self.component1.sin_phi_operator
-                self.op2 = (self.component2.a + self.component2.adag)
-                return self.op1, self.op2, self.g
+        if isinstance(self.subsys1, Transmon) and isinstance(self.subsys2, Resonator):
+            if self.kind == "capacitive":
+                # H_int = -i * g * (n_t - ng) * (a - a^dagger)
+                # op1 = n_t, op2 = -i * (a - a^dagger)
+                op1 = self.subsys1.n_operator
+                op2 = -1j * (self.subsys2.a - self.subsys2.adag)
+                return op1, op2, self.g
+            elif self.kind == "inductive":
+                op1 = self.subsys1.sin_phi_operator
+                op2 = (self.subsys2.a + self.subsys2.adag)
+                return op1, op2, self.g
 
-        if isinstance(self.component1, Resonator) and isinstance(self.component2, Transmon):
-            self.op2, self.op1, self.g = Interaction(self.g, self.component2, self.component1, self.kind).get_operator()
-            return self.op1, self.op2, self.g
+        elif isinstance(self.subsys1, Resonator) and isinstance(self.subsys2, Transmon):
+            op2, op1, g = Interaction(self.g, self.subsys2, self.subsys1, kind=self.kind).get_operators()
+            return op1, op2, g
+
 
         # Resonator <-> Resonator
-        if isinstance(self.component1, Resonator) and isinstance(self.component2, Resonator):
-            if self.kind == 'capacitive':
-                self.op1 = (self.component1.a - self.component1.adag)
-                self.op2 = (self.component2.a - self.component2.adag)
-                return self.op1, self.op2, self.g
-            if self.kind == 'inductive':
-                self.op1 = (self.component1.a + self.component1.adag)
-                self.op2 = (self.component2.a + self.component2.adag)
-                return self.op1, self.op2, self.g
+        elif isinstance(self.subsys1, Resonator) and isinstance(self.subsys2, Resonator):
+            if self.kind == "capacitive":
+                # H_int = g * (a1 - a1^dagger) * (a2 - a2^dagger)
+                op1 = (self.subsys1.a - self.subsys1.adag)
+                op2 = (self.subsys2.a - self.subsys2.adag)
+                return op1, op2, self.g
+            elif self.kind == "inductive":
+                # H_int = g * (a1 + a1^dagger) * (a2 + a2^dagger)
+                op1 = (self.subsys1.a + self.subsys1.adag)
+                op2 = (self.subsys2.a + self.subsys2.adag)
+                return op1, op2, self.g
 
         # Transmon <-> Transmon
-        elif isinstance(self.component1, Transmon) and isinstance(self.component2, Transmon):
-            if self.kind == 'capacitive':
-                self.op1 = self.component1.n_operator
-                self.op2 = self.component2.n_operator
-                return self.op1, self.op2, 4.0 * self.g
+        elif isinstance(self.subsys1, Transmon) and isinstance(self.subsys2, Transmon):
+            if self.kind == "capacitive":
+                # H_int = 4 * g * (n1 - ng1) * (n2 - ng2)
+                op1 = self.subsys1.n_operator
+                op2 = self.subsys2.n_operator
+                return op1, op2, 4.0 * self.g
 
         raise NotImplementedError(
             f"Coupling kind '{self.kind}' between {type(self.component1).__name__} "
