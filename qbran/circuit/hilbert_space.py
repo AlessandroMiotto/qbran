@@ -180,6 +180,15 @@ class HilbertSpace:
             state.append(val)
         return tuple(state)
 
+    def dressed_index(self, bare_state: Tuple[int, ...]) -> int:
+        """Returns the dressed eigenstate index with maximum overlap onto the given bare state."""
+        if self._evecs is None:
+            self.diagonalize()
+        flat_idx = self.bare_index(bare_state)
+        # Overlap with all computed dressed states: |<dressed_j | bare>|^2
+        overlaps = np.abs(self._evecs[flat_idx, :]) ** 2
+        return int(np.argmax(overlaps))
+
     def bare_state(self, dressed_idx: int) -> Tuple[int, ...]:
         """Returns the bare state tuple (i_0, i_1, ...) with maximum overlap onto dressed eigenstate."""
         if self._evecs is None:
