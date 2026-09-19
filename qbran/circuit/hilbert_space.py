@@ -1,6 +1,6 @@
 """Joint Hilbert space of the circuit"""
 
-from typing import List, Optional, Tuple, Tuple, Union
+from typing import Any, List, Optional, Tuple, Tuple, Union
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -16,7 +16,7 @@ class HilbertSpace:
     components : List[Component]
         List of circuit components.
     backend : str, optional
-        Backend for linear algebra representation: 'sparse' (SciPy CSR) or 'dense' (NumPy/JAX). Default is 'sparse'.
+        Backend for linear algebra representation: 'sparse' (SciPy CSR) or 'dense' (NumPy). Default is 'sparse'.
     k : int, optional
         Number of lowest energy eigenstates to compute upon diagonalization. Default is None, which means all eigenstates will be computed.
     """
@@ -127,7 +127,7 @@ class HilbertSpace:
             h_interaction = self.emmbed_2body(op1, idx1, op2, idx2, sparse=is_sparse)
             H_total = H_total + g * h_interaction
 
-        # TODO: Add gauge transformation
+        # TODO: Add gauge transformation to have real matrices
         
         return H_total
 
@@ -197,3 +197,8 @@ class HilbertSpace:
         overlaps = np.abs(evec) ** 2
         best_flat = int(np.argmax(overlaps))
         return self.flat_to_bare_state(best_flat)
+
+    def BranchAnalysis(self, kind: str, options: Optional[Any] = None) -> Any:
+        """Returns a BranchAnalysis engine configured for this circuit."""
+        from qbran.analysis.analysis import BranchAnalysis
+        return BranchAnalysis(circuit=self, kind=kind, options=options)

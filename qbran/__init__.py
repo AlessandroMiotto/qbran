@@ -6,6 +6,7 @@ __version__ = "0.1.0"
 from qbran.circuit.components import Transmon, Resonator, Oscillator
 from qbran.circuit.interactions import Interaction
 from qbran.circuit.hilbert_space import HilbertSpace
+from qbran.analysis import BranchAnalysis, Options, Result
 
 __all__ = [
     "Transmon", 
@@ -13,4 +14,7 @@ __all__ = [
     "Oscillator",
     "Interaction",
     "HilbertSpace",
+    "BranchAnalysis",
+    "Options",
+    "Result",
 ]
