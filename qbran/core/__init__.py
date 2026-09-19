@@ -11,6 +11,12 @@ from qbran.core.operators import (
     quadrature_p,
 )
 
+from qbran.core.gauge import (
+    make_real_gauge,
+    is_strictly_real,
+    apply_gauge_to_evecs,
+)
+
 __all__ = [
     "charge_operator",
     "cos_phi_operator",
@@ -20,4 +26,7 @@ __all__ = [
     "number_operator",
     "quadrature_x",
     "quadrature_p",
+    "make_real_gauge",
+    "is_strictly_real",
+    "apply_gauge_to_evecs",
 ]

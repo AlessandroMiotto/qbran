@@ -1,12 +1,13 @@
 """Joint Hilbert space of the circuit"""
 
-from typing import Any, List, Optional, Tuple, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 from qbran.circuit.components import Component, Transmon, Resonator
 from qbran.circuit.interactions import Interaction
+from qbran.core.gauge import make_real_gauge, apply_gauge_to_evecs, is_strictly_real
 
 class HilbertSpace:
     """Joint Hilbert space of the circuit.
@@ -60,6 +61,7 @@ class HilbertSpace:
         c1 = kwargs.get('component1', kwargs.get('c1', None))
         c2 = kwargs.get('component2', kwargs.get('c2', None))
         kind = kwargs.get('kind', 'capacitive')
+        real_gauge = kwargs.get('real_gauge', True)
         op1 = kwargs.get('op1', None)
         op2 = kwargs.get('op2', None)
 
@@ -86,7 +88,15 @@ class HilbertSpace:
                 f"add_interaction requires coupling strength g and two components. Got: c1={c1}, c2={c2}, g={g_val}"
             )
 
-        inter = Interaction(g=float(g_val), component1=c1, component2=c2, kind=kind, op1=op1, op2=op2)
+        inter = Interaction(
+            g=float(g_val),
+            component1=c1,
+            component2=c2,
+            kind=kind,
+            real_gauge=real_gauge,
+            op1=op1,
+            op2=op2,
+        )
         self.interactions.append(inter)
         self._evals = None
         self._evecs = None
@@ -140,9 +150,21 @@ class HilbertSpace:
             result = result.tocsr()
         return result
 
-    def get_hamiltonian(self, sparse : Optional[bool] = None) -> Union[np.ndarray, 'sp.csr_matrix']:
-        """Build the joint undriven Hamiltonian of the circuit."""
-
+    def get_hamiltonian(
+        self,
+        sparse: Optional[bool] = None,
+        enforce_real: bool = True,
+    ) -> Union[np.ndarray, sp.csr_matrix]:
+        """Build the joint undriven Hamiltonian of the circuit.
+        
+        Parameters
+        ----------
+        sparse : bool, optional
+            Whether to return sparse CSR or dense matrix.
+        enforce_real : bool, optional
+            Whether to automatically apply unitary gauge transformation to guarantee
+            a strictly real symmetric (float64) Hamiltonian. Default is True.
+        """
         is_sparse = (self.backend == 'sparse') if sparse is None else bool(sparse)
 
         # Bare hamiltonian
@@ -160,24 +182,35 @@ class HilbertSpace:
             h_interaction = self.emmbed_2body(op1, idx1, op2, idx2, sparse=is_sparse)
             H_total = H_total + g * h_interaction
 
-        # TODO: Add gauge transformation to have real matrices
-        
+        if enforce_real:
+            H_real, D, success = make_real_gauge(H_total, sparse=is_sparse)
+            self._gauge_D = D
+            self._is_real = success
+            if success:
+                return H_real
+
+        self._gauge_D = np.ones(self.dimension, dtype=np.complex128)
+        self._is_real = is_strictly_real(H_total)
         return H_total
 
     def diagonalize(self, k: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
         """Diagonalize the joint Hamiltonian of the circuit and return the lowest k eigenvalues and eigenvectors."""
         k_val = self.k if k is None else min(int(k), self.dimension)
-        H = self.get_hamiltonian(sparse=(self.backend == 'sparse'))
+        H = self.get_hamiltonian(sparse=(self.backend == 'sparse'), enforce_real=True)
 
         if self.backend == 'sparse' and k_val < self.dimension:
-            # SciPy ARPACK sparse shift-invert eigensolver
+            # SciPy ARPACK sparse eigensolver
             evals, evecs = spla.eigsh(H, k=k_val, which='SA')
         else:
-            # Dense NumPy eigensolver (TODO: add JAX support if needed)
+            # Dense NumPy eigensolver
             H_dense = H.toarray() if sp.issparse(H) else H
             evals, evecs = np.linalg.eigh(H_dense)
             evals = evals[:k_val]
             evecs = evecs[:, :k_val]
+
+        if self._is_real:
+            evals = np.real(evals)
+            evecs = np.real(evecs)
 
         idx_sort = np.argsort(evals)
         self._evals = evals[idx_sort]

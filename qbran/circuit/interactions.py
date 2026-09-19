@@ -31,6 +31,7 @@ class Interaction:
         component1: Component,
         component2: Component,
         kind: str = 'capacitive',
+        real_gauge: bool = True,
         op1: Optional[np.ndarray] = None,
         op2: Optional[np.ndarray] = None
     ):
@@ -38,11 +39,14 @@ class Interaction:
         self.component1 = component1
         self.component2 = component2
         self.kind = kind.lower()
+        self.real_gauge = real_gauge
         self.custom_op1 = op1
         self.custom_op2 = op2
 
-    def get_operator(self) -> Tuple[np.ndarray, np.ndarray, float]:
+    def get_operator(self, real_gauge: Optional[bool] = None) -> Tuple[np.ndarray, np.ndarray, float]:
         """Return the interaction operator for the two components."""
+        use_real = self.real_gauge if real_gauge is None else bool(real_gauge)
+
         if self.kind == "custom":
             if self.custom_op1 is None or self.custom_op2 is None:
                 raise ValueError("kind='custom' requires op1 and op2 to be provided.")
@@ -51,9 +55,13 @@ class Interaction:
         # Transmon <-> Resonator
         if isinstance(self.component1, Transmon) and isinstance(self.component2, Resonator):
             if self.kind == "capacitive":
-                # Canonical charge-dipole gauge: H_int = -i * g * n_t * (a - a^dagger)
                 op1 = self.component1.n_operator
-                op2 = -1j * (self.component2.a - self.component2.adag)
+                if use_real:
+                    # Real-symmetric gauge: H_int = g * n_t * (a + a^dagger) = sqrt(2) * g * n_t * x_r
+                    op2 = self.component2.a + self.component2.adag
+                else:
+                    # Canonical charge-dipole gauge: H_int = -i * g * n_t * (a - a^dagger)
+                    op2 = -1j * (self.component2.a - self.component2.adag)
                 return op1, op2, self.g
             elif self.kind == "inductive":
                 op1 = self.component1.sin_phi_operator
@@ -61,16 +69,22 @@ class Interaction:
                 return op1, op2, self.g
 
         elif isinstance(self.component1, Resonator) and isinstance(self.component2, Transmon):
-            op2, op1, g = Interaction(self.g, self.component2, self.component1, kind=self.kind).get_operator()
+            op2, op1, g = Interaction(
+                self.g, self.component2, self.component1, kind=self.kind, real_gauge=use_real
+            ).get_operator(real_gauge=use_real)
             return op1, op2, g
-
 
         # Resonator <-> Resonator
         elif isinstance(self.component1, Resonator) and isinstance(self.component2, Resonator):
             if self.kind == "capacitive":
-                # H_int = g * (a1 - a1^dagger) * (a2 - a2^dagger)
-                op1 = (self.component1.a - self.component1.adag)
-                op2 = (self.component2.a - self.component2.adag)
+                if use_real:
+                    # Real-symmetric gauge: H_int = g * (a1 + a1^dagger) * (a2 + a2^dagger)
+                    op1 = (self.component1.a + self.component1.adag)
+                    op2 = (self.component2.a + self.component2.adag)
+                else:
+                    # Canonical laboratory gauge: H_int = g * (a1 - a1^dagger) * (a2 - a2^dagger)
+                    op1 = (self.component1.a - self.component1.adag)
+                    op2 = (self.component2.a - self.component2.adag)
                 return op1, op2, self.g
             elif self.kind == "inductive":
                 # H_int = g * (a1 + a1^dagger) * (a2 + a2^dagger)
@@ -81,7 +95,7 @@ class Interaction:
         # Transmon <-> Transmon
         elif isinstance(self.component1, Transmon) and isinstance(self.component2, Transmon):
             if self.kind == "capacitive":
-                # H_int = 4 * g * (n1 - ng1) * (n2 - ng2)
+                # H_int = 4 * g * (n1 - ng1) * (n2 - ng2) (purely real and symmetric)
                 op1 = self.component1.n_operator
                 op2 = self.component2.n_operator
                 return op1, op2, 4.0 * self.g
