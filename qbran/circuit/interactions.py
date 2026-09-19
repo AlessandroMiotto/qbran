@@ -51,8 +51,7 @@ class Interaction:
         # Transmon <-> Resonator
         if isinstance(self.component1, Transmon) and isinstance(self.component2, Resonator):
             if self.kind == "capacitive":
-                # H_int = -i * g * (n_t - ng) * (a - a^dagger)
-                # op1 = n_t, op2 = -i * (a - a^dagger)
+                # Canonical charge-dipole gauge: H_int = -i * g * n_t * (a - a^dagger)
                 op1 = self.component1.n_operator
                 op2 = -1j * (self.component2.a - self.component2.adag)
                 return op1, op2, self.g
@@ -62,7 +61,7 @@ class Interaction:
                 return op1, op2, self.g
 
         elif isinstance(self.component1, Resonator) and isinstance(self.component2, Transmon):
-            op2, op1, g = Interaction(self.g, self.component2, self.component1, kind=self.kind).get_operators()
+            op2, op1, g = Interaction(self.g, self.component2, self.component1, kind=self.kind).get_operator()
             return op1, op2, g
 
 

@@ -45,15 +45,48 @@ class HilbertSpace:
 
     def add_interaction(
         self,
-        g: float,
-        component1: Component,
-        component2: Component,
-        kind: str = 'capacitive',
-        op1: Optional[np.ndarray] = None,
-        op2: Optional[np.ndarray] = None
+        *args,
+        **kwargs
     ) -> Interaction:
-        """Add a pairwise interaction between two subsystems."""
-        inter = Interaction(g=g, component1=component1, component2=component2, kind=kind, op1=op1, op2=op2)
+        """Add a pairwise interaction between two subsystems.
+
+        Accepts flexible signatures:
+            add_interaction(g, component1, component2, kind='capacitive', ...)
+            add_interaction(component1, component2, g=0.12, ...)
+            add_interaction(component1, component2, 0.12, ...)
+            add_interaction(g=0.12, component1=tmon, component2=res, ...)
+        """
+        g_val = kwargs.get('g', None)
+        c1 = kwargs.get('component1', kwargs.get('c1', None))
+        c2 = kwargs.get('component2', kwargs.get('c2', None))
+        kind = kwargs.get('kind', 'capacitive')
+        op1 = kwargs.get('op1', None)
+        op2 = kwargs.get('op2', None)
+
+        remaining = list(args)
+        comps = []
+        nums = []
+        for a in remaining:
+            if isinstance(a, Component):
+                comps.append(a)
+            elif isinstance(a, (int, float, np.floating)):
+                nums.append(float(a))
+            elif isinstance(a, str):
+                kind = a
+
+        if c1 is None and len(comps) > 0:
+            c1 = comps.pop(0)
+        if c2 is None and len(comps) > 0:
+            c2 = comps.pop(0)
+        if g_val is None and len(nums) > 0:
+            g_val = nums.pop(0)
+
+        if c1 is None or c2 is None or g_val is None:
+            raise ValueError(
+                f"add_interaction requires coupling strength g and two components. Got: c1={c1}, c2={c2}, g={g_val}"
+            )
+
+        inter = Interaction(g=float(g_val), component1=c1, component2=c2, kind=kind, op1=op1, op2=op2)
         self.interactions.append(inter)
         self._evals = None
         self._evecs = None
@@ -198,7 +231,13 @@ class HilbertSpace:
         best_flat = int(np.argmax(overlaps))
         return self.flat_to_bare_state(best_flat)
 
-    def BranchAnalysis(self, kind: str, options: Optional[Any] = None) -> Any:
+    def BranchAnalysis(
+        self,
+        kind: str = "quantum",
+        options: Optional[Any] = None,
+        drive: Optional[Any] = None,
+        **kwargs
+    ) -> Any:
         """Returns a BranchAnalysis engine configured for this circuit."""
         from qbran.analysis.analysis import BranchAnalysis
-        return BranchAnalysis(circuit=self, kind=kind, options=options)
+        return BranchAnalysis(circuit=self, kind=kind, options=options, drive=drive, **kwargs)

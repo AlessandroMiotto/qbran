@@ -1,11 +1,15 @@
 """Result container for parameter sweeps and branch analyses with HDF5 persistence."""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Iterator
 import numpy as np
 import h5py
 
+
 class Result:
     """Stores the full physical dataset of a 2D Floquet or Branch parameter sweep.
+
+    Supports both dictionary indexing (`results['avg_excitation']`) and attribute
+    access (`results.avg_excitation`).
 
     Attributes
     ----------
@@ -16,15 +20,15 @@ class Result:
     drive_amp : np.ndarray
         1D array of swept drive amplitudes (n_photons or xi).
     quasienergies : np.ndarray
-        3D array of shape (n_freq, n_amp, n_levels).
+        Array of quasienergies.
     hybridization : np.ndarray
-        3D array of shape (n_freq, n_amp, n_target_states).
+        Array of hybridization metric values (e.g. Theta).
     partner : np.ndarray
-        3D integer array of shape (n_freq, n_amp, n_target_states).
+        Integer array of partner branch/states.
     partner_overlap : np.ndarray
-        3D array of shape (n_freq, n_amp, n_target_states).
+        Overlap with partner state.
     observables : dict
-        Mapping of observable name -> 3D array (n_freq, n_amp, n_target_states).
+        Mapping of observable name -> array.
     """
 
     def __init__(
@@ -37,6 +41,7 @@ class Result:
         partner: np.ndarray,
         partner_overlap: np.ndarray,
         observables: Dict[str, np.ndarray],
+        **extra_data,
     ):
         self.metadata = metadata
         self.drive_freq = np.asarray(drive_freq)
@@ -47,13 +52,59 @@ class Result:
         self.partner_overlap = np.asarray(partner_overlap)
         self.observables = {k: np.asarray(v) for k, v in observables.items()}
 
+        self._data: Dict[str, Any] = {
+            "metadata": self.metadata,
+            "drive_freq": self.drive_freq,
+            "drive_amp": self.drive_amp,
+            "quasienergies": self.quasienergies,
+            "hybridization": self.hybridization,
+            "partner": self.partner,
+            "partner_overlap": self.partner_overlap,
+            "observables": self.observables,
+        }
+
+        # Also pull observables to top-level for convenience
+        for k, v in self.observables.items():
+            self._data[k] = v
+            setattr(self, k, v)
+
+        # Merge any extra quantum branch outputs
+        for k, v in extra_data.items():
+            self._data[k] = v
+            setattr(self, k, v)
+
+    def __getitem__(self, key: str) -> Any:
+        if key in self._data:
+            return self._data[key]
+        if key in self.observables:
+            return self.observables[key]
+        raise KeyError(f"Key '{key}' not found in Result. Available keys: {list(self._data.keys())}")
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self._data[key] = value
+        setattr(self, key, value)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._data or key in self.observables
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._data.get(key, self.observables.get(key, default))
+
+    def keys(self):
+        return self._data.keys()
+
+    def values(self):
+        return self._data.values()
+
+    def items(self):
+        return self._data.items()
+
     def save(self, filename: str) -> None:
         """Exports the simulation results to a compressed HDF5 archive (.h5)."""
         if not filename.endswith(".h5"):
             filename += ".h5"
 
         with h5py.File(filename, "w") as f:
-            # Metadata as attributes
             meta_grp = f.create_group("metadata")
             for k, v in self.metadata.items():
                 try:
@@ -61,18 +112,15 @@ class Result:
                 except Exception:
                     meta_grp.attrs[k] = str(v)
 
-            # Axes
             axes_grp = f.create_group("axes")
             axes_grp.create_dataset("drive_freq", data=self.drive_freq, compression="gzip")
             axes_grp.create_dataset("drive_amp", data=self.drive_amp, compression="gzip")
 
-            # Metrics and spectrum
             f.create_dataset("quasienergies", data=self.quasienergies, compression="gzip")
             f.create_dataset("hybridization", data=self.hybridization, compression="gzip")
             f.create_dataset("partner", data=self.partner, compression="gzip")
             f.create_dataset("partner_overlap", data=self.partner_overlap, compression="gzip")
 
-            # Observables
             obs_grp = f.create_group("observables")
             for obs_name, arr in self.observables.items():
                 obs_grp.create_dataset(obs_name, data=arr, compression="gzip")
@@ -107,3 +155,7 @@ class Result:
             partner_overlap=partner_overlap,
             observables=observables,
         )
+
+    def __repr__(self) -> str:
+        keys_str = ", ".join(list(self._data.keys())[:8])
+        return f"Result(keys=[{keys_str}, ...])"

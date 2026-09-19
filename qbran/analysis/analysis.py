@@ -1,4 +1,4 @@
-"""BranchAnalysis runner and Options container for 2D Floquet parameter sweeps."""
+"""BranchAnalysis runner and Options container for quantum and Floquet simulations."""
 
 from typing import List, Optional, Any, Union
 import numpy as np
@@ -7,97 +7,114 @@ from qbran.analysis.result import Result
 
 
 class Options:
-    """Configuration options for Floquet, branch analysis, and parameter sweeps.
-    
+    """Configuration options for quantum and Floquet branch analysis.
+
     Parameters
     ----------
+    n_rungs : int, optional
+        Number of drive resonator rungs to track in quantum branch analysis.
+        Defaults to drive.truncated_dim - 2.
+    batch_size : int, optional
+        Number of frequencies evaluated simultaneously via JAX vmap. Default 1.
+    drive : Any, optional
+        Drive mode specification (name, index, or Component).
     hybridization : str, optional
-        Metric: 'pr', 'entropy', or 'overlap', default 'pr'.
-    fit_degree : int, optional
-        Degree of 2D polynomial when hybridization='overlap', default 4.
-    overlap_cutoff : float, optional
-        Overlap threshold to exclude resonant outliers from polynomial fit, default 0.8.
+        Metric: 'theta' / 'dai', 'pr', 'entropy', default 'theta'.
     num_cpu : int, optional
-        Number of CPU worker processes for parallel sweeps, default 4.
-    adaptive : bool, optional
-        Whether to use 2D quadtree adaptive mesh refinement, default False.
-    n_replicas : int, optional
-        Harmonic replica truncation order M (total replicas 2M+1), default 5.
+        Number of CPU worker processes for Floquet parallel sweeps, default 4.
     target_states : List[int], optional
-        Indices of computational states to track (default [0, 1]).
-    average_ng : bool, optional
-        Whether to perform gate-charge noise averaging, default False.
-    n_samples_ng : int, optional
-        Number of ng samples over [0, 0.5] if average_ng is True, default 20.
+        Indices of computational branches to track, default [0, 1].
     """
 
     def __init__(
         self,
-        hybridization: str = "pr",
-        fit_degree: int = 4,
-        overlap_cutoff: float = 0.8,
+        n_rungs: Optional[int] = None,
+        batch_size: int = 1,
+        drive: Optional[Any] = None,
+        hybridization: str = "theta",
         num_cpu: int = 4,
-        adaptive: bool = False,
-        n_replicas: int = 5,
         target_states: Optional[List[int]] = None,
-        average_ng: bool = False,
-        n_samples_ng: int = 20,
+        **kwargs,
     ):
+        self.n_rungs = n_rungs
+        self.batch_size = int(batch_size)
+        self.drive = drive
         self.hybridization = hybridization.lower()
-        self.fit_degree = int(fit_degree)
-        self.overlap_cutoff = float(overlap_cutoff)
         self.num_cpu = int(num_cpu)
-        self.adaptive = bool(adaptive)
-        self.n_replicas = int(n_replicas)
         self.target_states = [0, 1] if target_states is None else list(target_states)
-        self.average_ng = bool(average_ng)
-        self.n_samples_ng = int(n_samples_ng)
+
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
 
 class BranchAnalysis:
-    """Executes branch analysis
-    
+    """Unified engine for quantum and Floquet branch analysis.
+
     Parameters
     ----------
     circuit : Any
         Circuit Hilbert space (transmon + resonators).
     kind : str, optional
-        Simulation kind: 'floquet', 'quantum'.
+        Simulation framework: 'quantum' (default) or 'floquet'.
     options : Options, optional
-        Configuration options for the analysis.
+        Configuration options for the simulation.
+    drive : Any, optional
+        Measurement / drive resonator component (e.g. 'res1', Resonator object, or index).
     """
 
-    def __init__(self, circuit: Any, kind: str, options: Optional[Options] = None):
+    def __init__(
+        self,
+        circuit: Any,
+        kind: str = "quantum",
+        options: Optional[Options] = None,
+        drive: Optional[Any] = None,
+        **kwargs,
+    ):
         self.circuit = circuit
         self.kind = kind.lower()
         self.options = options if options is not None else Options()
+        self.drive = drive if drive is not None else getattr(self.options, "drive", None)
+        self.kwargs = kwargs
+
         if self.kind not in ["floquet", "quantum"]:
-            raise ValueError(f"Invalid kind '{self.kind}'. Must be 'floquet' or 'quantum'.")
+            raise ValueError(f"Invalid kind '{self.kind}'. Must be 'quantum' or 'floquet'.")
 
     def run(
         self,
-        drive_freq: Union[np.ndarray, List[float]],
-        drive_amp: Union[np.ndarray, List[float]] = None,
+        drive_freq: Optional[Union[np.ndarray, List[float], float]] = None,
+        drive_amp: Optional[Union[np.ndarray, List[float]]] = None,
         save: bool = False,
         filename: str = "out.h5",
     ) -> Result:
-        """Runs the 2D sweep across drive frequencies and amplitudes."""
-        
-        freq_arr = np.asarray(drive_freq, dtype=np.float64) 
-        amp_arr = np.asarray(drive_amp, dtype=np.float64)
+        """Executes the branch analysis.
 
-        if self.options.adaptive:
-            # TODO: Add adaptive mesh refinement logic
-            raise NotImplementedError("Adaptive mesh refinement is not yet implemented.")
-
-        if self.kind == "floquet":
-            # TODO: Add Floquet analysis logic
-            raise NotImplementedError("Floquet analysis is not yet implemented.")
+        Parameters
+        ----------
+        drive_freq : float, list, or ndarray, optional
+            Drive frequency (or frequencies) in GHz. For quantum analysis, if omitted,
+            defaults to the fundamental frequency of the drive resonator.
+        drive_amp : list or ndarray, optional
+            Drive amplitudes (for Floquet sweeps).
+        save : bool, optional
+            Whether to save the result to an HDF5 archive. Default False.
+        filename : str, optional
+            Target filename if save is True. Default 'out.h5'.
+        """
         if self.kind == "quantum":
-            # TODO: Add quantum analysis logic
-            raise NotImplementedError("Quantum analysis is not yet implemented.")
+            from qbran.quantum.branch import QuantumBranchAnalysis
 
-        # if save:
-        #     #result.save(filename)
+            engine = QuantumBranchAnalysis(
+                circuit=self.circuit,
+                options=self.options,
+                drive=self.drive,
+            )
+            result = engine.run(frequencies=drive_freq)
 
-        return None #result
+            if save:
+                result.save(filename)
+            return result
+
+        elif self.kind == "floquet":
+            raise NotImplementedError("Floquet analysis will be configured next.")
+
+        return None
