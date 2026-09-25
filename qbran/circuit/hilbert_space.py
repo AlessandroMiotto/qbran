@@ -17,12 +17,12 @@ class HilbertSpace:
     components : List[Component]
         List of circuit components.
     backend : str, optional
-        Backend for linear algebra representation: 'sparse' (SciPy CSR) or 'dense' (NumPy). Default is 'sparse'.
+        Backend for linear algebra representation: 'sparse' (SciPy CSR) or 'dense' (NumPy). Default is 'dense'.
     k : int, optional
         Number of lowest energy eigenstates to compute upon diagonalization. Default is None, which means all eigenstates will be computed.
     """
 
-    def __init__(self, components: List[Component], backend: str = 'sparse', k: int = None):
+    def __init__(self, components: List[Component], backend: str = 'dense', k: int = None):
         self.components = list(components)
         self.backend = backend.lower()
         self.interactions: List[Interaction] = []
@@ -228,49 +228,12 @@ class HilbertSpace:
             return self._evecs
         raise KeyError(f"Invalid key '{key}'. Valid keys are 'evals' and 'evecs'.")
 
-    def bare_index(self, bare_state: Tuple[int, ...]) -> int:
-        """Converts a tuple of subsystem quantum numbers (e.g. (1, 0, 0)) to flat product index."""
-        if len(bare_state) != len(self.dims):
-            raise ValueError(f"Expected {len(self.dims)} indices, got {len(bare_state)}.")
-        flat_idx = 0
-        for val, stride in zip(bare_state, self._strides):
-            flat_idx += int(val) * stride
-        return flat_idx
-
-    def flat_to_bare_state(self, flat_idx: int) -> Tuple[int, ...]:
-        """Converts a flat product basis index to a tuple of subsystem quantum numbers."""
-        idx = int(flat_idx)
-        state = []
-        for stride, dim in zip(self._strides, self.dims):
-            val = (idx // stride) % dim
-            state.append(val)
-        return tuple(state)
-
-    def dressed_index(self, bare_state: Tuple[int, ...]) -> int:
-        """Returns the dressed eigenstate index with maximum overlap onto the given bare state."""
-        if self._evecs is None:
-            self.diagonalize()
-        flat_idx = self.bare_index(bare_state)
-        # Overlap with all computed dressed states: |<dressed_j | bare>|^2
-        overlaps = np.abs(self._evecs[flat_idx, :]) ** 2
-        return int(np.argmax(overlaps))
-
-    def bare_state(self, dressed_idx: int) -> Tuple[int, ...]:
-        """Returns the bare state tuple (i_0, i_1, ...) with maximum overlap onto dressed eigenstate."""
-        if self._evecs is None:
-            self.diagonalize()
-        evec = self._evecs[:, int(dressed_idx)]
-        overlaps = np.abs(evec) ** 2
-        best_flat = int(np.argmax(overlaps))
-        return self.flat_to_bare_state(best_flat)
-
     def BranchAnalysis(
         self,
         kind: str = "quantum",
         options: Optional[Any] = None,
-        drive: Optional[Any] = None,
         **kwargs
     ) -> Any:
         """Returns a BranchAnalysis engine configured for this circuit."""
         from qbran.analysis.analysis import BranchAnalysis
-        return BranchAnalysis(circuit=self, kind=kind, options=options, drive=drive, **kwargs)
+        return BranchAnalysis(circuit=self, kind=kind, options=options, **kwargs)

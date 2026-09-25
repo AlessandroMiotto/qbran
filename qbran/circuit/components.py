@@ -101,17 +101,17 @@ class Transmon(Component):
     @property
     def wp(self) -> float:
         """Plasma frequency of the transmon wp = sqrt(8 * E_J * E_C)."""
-        return np.sqrt(8.0 * self.EJ * self.EC)
+        return float(np.sqrt(8.0 * self.EJ * self.EC))
 
     @property
     def anharmonicity(self) -> float:
         """Qubit anharmonicity alpha = (E2 - E1) - (E1 - E0)."""
-        return (self.evals[2] - self.evals[1]) - (self.evals[1] - self.evals[0])
+        return float((self.evals[2] - self.evals[1]) - (self.evals[1] - self.evals[0]))
 
     @property
     def E01(self) -> float:
         """Transition energy E01 = E1 - E0."""
-        return self.evals[1] - self.evals[0]
+        return float(self.evals[1] - self.evals[0])
 
     @property
     def n_operator(self) -> np.ndarray:
