@@ -2,29 +2,46 @@
 
 from typing import List, Optional, Any, Union
 import numpy as np
+import scipy.sparse as sp
 
 from qbran.analysis.result import Result
 
 
 class Options:
-    """Configuration options for quantum and Floquet branch analysis.
+    r"""Configuration options for quantum and Floquet branch analysis.
 
     Parameters
     ----------
-    hybridization : str, optional
-        Metric: 'fit', 'pr'. Default 'fit'.
-    num_cpu : int, optional
-        Number of CPU worker processes for Floquet parallel sweeps, default 4.
+    sparse : bool, optional
+            Whether to use sparse matrix representation for the Shirley Hamiltonian, default True.
+    K : int, optional
+        Fourier harmonic cutoff for the Shirley Hamiltonian, default 8.
+    k : int, optional
+        Number of lowest energy eigenstates to compute upon diagonalization, default None (all eigenstates).
+    drive_idx : int, optional
+        Index of the component to which the drive is applied, default 0.
+    drive_op : np.ndarray or sp.csr_matrix, optional
+        Drive operator for the component at drive_idx. If None, defaults to the number operator for a Transmon component.  
+        $$\hat{H}_{\text{drive}} = \hat{V} \cos{\omega_d t}$$
     """
 
     def __init__(
         self,
-        hybridization: str = "fit",
-        num_cpu: int = 4,
+        sparse: bool = True,
+        K: int = 8,
+        k: int = None,
+        drive_idx: int = 0,
+        drive_op: Optional[Union[np.ndarray, sp.csr_matrix]] = None,
         **kwargs,
     ):
-        self.hybridization = hybridization.lower()
-        self.num_cpu = int(num_cpu)
+        self.sparse = bool(sparse)
+
+        self.K = int(K)
+        self.k = k
+        self.drive_idx = int(drive_idx)
+        self.drive_op = drive_op
+
+        #TODO: check that drive_op is valid for the component at drive_idx
 
         for k, v in kwargs.items():
             setattr(self, k, v)

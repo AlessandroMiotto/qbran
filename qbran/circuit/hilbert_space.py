@@ -16,15 +16,15 @@ class HilbertSpace:
     ----------
     components : List[Component]
         List of circuit components.
-    backend : str, optional
-        Backend for linear algebra representation: 'sparse' (SciPy CSR) or 'dense' (NumPy). Default is 'dense'.
+    sparse : bool, optional
+            Whether to use sparse matrices for the Hamiltonian. Default is True.
     k : int, optional
         Number of lowest energy eigenstates to compute upon diagonalization. Default is None, which means all eigenstates will be computed.
     """
 
-    def __init__(self, components: List[Component], backend: str = 'dense', k: int = None):
+    def __init__(self, components: List[Component], sparse: bool = True, k: int = None):
         self.components = list(components)
-        self.backend = backend.lower()
+        self.sparse = bool(sparse)
         self.interactions: List[Interaction] = []
 
         self.dims = [comp.truncated_dim for comp in self.components]
@@ -100,7 +100,6 @@ class HilbertSpace:
         self.interactions.append(inter)
         self._evals = None
         self._evecs = None
-        return inter
 
     def embed_operator(
         self, op: Union[np.ndarray, sp.csr_matrix], 
@@ -165,7 +164,7 @@ class HilbertSpace:
             Whether to automatically apply unitary gauge transformation to guarantee
             a strictly real symmetric (float64) Hamiltonian. Default is True.
         """
-        is_sparse = (self.backend == 'sparse') if sparse is None else bool(sparse)
+        is_sparse = self.sparse
 
         # Bare hamiltonian
         H_total = None
@@ -196,9 +195,9 @@ class HilbertSpace:
     def diagonalize(self, k: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
         """Diagonalize the joint Hamiltonian of the circuit and return the lowest k eigenvalues and eigenvectors."""
         k_val = self.k if k is None else min(int(k), self.dimension)
-        H = self.get_hamiltonian(sparse=(self.backend == 'sparse'), enforce_real=True)
+        H = self.get_hamiltonian(sparse=self.sparse, enforce_real=True)
 
-        if self.backend == 'sparse' and k_val < self.dimension:
+        if self.sparse and k_val < self.dimension:
             # SciPy ARPACK sparse eigensolver
             evals, evecs = spla.eigsh(H, k=k_val, which='SA')
         else:
