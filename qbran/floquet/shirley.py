@@ -4,10 +4,12 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.optimize import linear_sum_assignment
+from tqdm import tqdm
 
 from qbran.circuit.components import Transmon
 from qbran.circuit.hilbert_space import HilbertSpace
 from qbran.analysis.analysis import Options
+from qbran.analysis.result import Result
 
 def kron(
     A: Union[np.ndarray, sp.csr_matrix], 
@@ -77,13 +79,45 @@ def build_shirley_hamiltonian(
     
     return HF
 
+def build_shirley_diagonal(
+    H0: Union[np.ndarray, sp.csr_matrix],
+    omega: float,
+    K: int,
+    sparse: bool = True
+) -> Union[np.ndarray, sp.csr_matrix]:
+    """Construct the diagonal part of the Shirley Hamiltonian."""
+    if sparse:
+        I_K = sp.eye(2*K + 1, format='csr')
+        N_K = sp.diags(np.arange(-K, K + 1), 0, shape=(2*K + 1, 2*K + 1), format='csr')
+        H0_s = sp.kron(I_K, H0, format='csr') + sp.kron(N_K, sp.eye(H0.shape[0], format='csr'), format='csr') * omega
+        return H0_s
+    else:
+        H0 = H0.toarray() if sp.issparse(H0) else H0
+        I_K = np.eye(2*K + 1)
+        N_K = np.diag(np.arange(-K, K + 1))
+        H0_s = np.kron(I_K, H0) + np.kron(N_K, np.eye(H0.shape[0])) * omega
+        return H0_s
+
+def build_shirley_off_diagonal(
+    V: Union[np.ndarray, sp.csr_matrix],
+    amp: float,
+    K: int,
+    sparse: bool = True
+) -> Union[np.ndarray, sp.csr_matrix]:
+    """Construct the off-diagonal part of the Shirley Hamiltonian."""
+    off_diag = 0.5 * amp * V
+    sup_diag = sp.diags([1], [1],  shape=(2*K+1, 2*K+1), format='csr')
+    sub_diag = sp.diags([1], [-1], shape=(2*K+1, 2*K+1), format='csr')
+    HF_off = sp.kron(sup_diag, off_diag.conj().T, format='csr') + sp.kron(sub_diag, off_diag, format='csr')
+    HF_off = HF_off if sparse else HF_off.toarray()
+    return HF_off
+
 def init_sorting(
     H0 : Union[np.ndarray, sp.csr_matrix],
     omega : float,
     d : int,
     D: int,
     K: int,
-    sparse: bool,
 ) -> np.ndarray:
     """Construct the ideal folded states at A=0 to lock the sorting"""
     H0_dense = H0.toarray() if sp.issparse(H0) else H0
@@ -103,12 +137,13 @@ def init_sorting(
 def diagonalize_shirley(
     HF: Union[np.ndarray, sp.csr_matrix],
     k: int,
-    sparse: bool,
+    v0: Optional[np.ndarray] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Diagonalize the Shirley Hamiltonian and return the lowest k eigenvalues and eigenvectors."""
 
-    if sparse:
-        evals, evecs = spla.eigsh(HF, k=k, sigma=1e-6, which='LM')
+    if sp.issparse(HF):
+        if v0 is None: evals, evecs = spla.eigsh(HF, k=k, sigma=1e-6, which='LM')
+        else: evals, evecs = spla.eigsh(HF, k=k, sigma=1e-6, which='LM', v0=v0)
     else:
         evals, evecs = np.linalg.eigh(HF)
         idxs = np.argsort(evals)
@@ -145,13 +180,20 @@ def shirley_single_frequency(
     n_op = sp.diags(np.arange(d)) if sparse else np.diag(np.arange(d))
     N = kron(id(2*K + 1, sparse),  n_op, sparse)
 
-    prev_evecs = init_sorting(H0, freq, d, D, K, sparse)
+    prev_evecs = init_sorting(H0, freq, d, D, K)
+    evecs = None
     quasienergies = np.zeros((len(amps), k), dtype=np.float64)
     excitations   = np.zeros((len(amps), k), dtype=np.float64)
+    hybridization = np.zeros((len(amps), k), dtype=np.float64)
+
+    # Precompute the diagonal part of the Floquet Hamiltonian
+    H0_s = build_shirley_diagonal(H0, freq, K, sparse)
 
     for i, amp in enumerate(amps):
-        HF = build_shirley_hamiltonian(H0, V, freq, amp, K, sparse)
-        evals, evecs = diagonalize_shirley(HF, k, sparse)
+        H_off = build_shirley_off_diagonal(V, amp, K, sparse)
+        HF = H0_s + H_off
+
+        evals, evecs = diagonalize_shirley(HF, k, v0=evecs[:, 0] if evecs is not None else None)
 
         # Sort the eigenvectors to track the states
         overlap = np.abs(prev_evecs.conj().T @ evecs)
@@ -160,9 +202,53 @@ def shirley_single_frequency(
         current_evals = evals[col_ind]
         current_evecs = evecs[:, col_ind]
         prev_evecs = current_evecs
+
         Nexp = np.diag(current_evecs.conj().T @ (N @ current_evecs))
+
+        if options.hybridization == "susceptibility":
+            dH_dA = build_shirley_off_diagonal(V, 1.0, K, sparse)
+            dH_matrix = current_evecs.conj().T @ (dH_dA @ current_evecs)
+            for n in range(k):
+                for m in range(k):
+                    if n == m:
+                        continue
+                    delta_E = current_evals[m] - current_evals[n]
+                    if np.abs(delta_E) > 1e-12:
+                        hybridization[i, n] += (np.abs(dH_matrix[m, n])**2) / (delta_E**2)
 
         quasienergies[i] = current_evals
         excitations[i] = Nexp
 
-    return quasienergies, excitations
+    return quasienergies, excitations, hybridization
+
+
+def shirley_branch_analysis(
+    circuit: HilbertSpace,
+    freq: float,
+    amps: Union[np.ndarray, list],
+    options: Options,
+) -> Result:
+
+    options.k = options.k if options.k is not None else circuit.dimension
+    options.k = min(options.k, circuit.dimension)
+
+    res = Result(
+        metadata   = None,
+        drive_freq = freq,
+        drive_amp  = amps,
+        quasienergies = np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
+        hybridization = np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
+        observables={
+            "avg_excitation" : np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
+        },
+    )
+
+    freq = np.atleast_1d(np.asarray(freq, dtype=float))
+    amps = np.asarray(amps, dtype=float)
+    for i, drive_freq in enumerate(tqdm(freq, desc="Branch Analysis", total=len(freq))):
+        quasienergies, excitations, hybridization = shirley_single_frequency(circuit, drive_freq, amps, options)
+        res.quasienergies[i] = quasienergies
+        res.observables["avg_excitation"][i] = excitations
+        res.hybridization[i] = hybridization
+
+    return res

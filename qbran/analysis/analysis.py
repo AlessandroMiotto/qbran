@@ -6,7 +6,6 @@ import scipy.sparse as sp
 
 from qbran.analysis.result import Result
 
-
 class Options:
     r"""Configuration options for quantum and Floquet branch analysis.
 
@@ -32,6 +31,7 @@ class Options:
         k: int = None,
         drive_idx: int = 0,
         drive_op: Optional[Union[np.ndarray, sp.csr_matrix]] = None,
+        hybridization: str = "susceptibility",
         **kwargs,
     ):
         self.sparse = bool(sparse)
@@ -40,6 +40,7 @@ class Options:
         self.k = k
         self.drive_idx = int(drive_idx)
         self.drive_op = drive_op
+        self.hybridization = hybridization.lower()
 
         #TODO: check that drive_op is valid for the component at drive_idx
 
@@ -97,9 +98,11 @@ class BranchAnalysis:
             Target filename if save is True. Default 'out.h5'.
         """
         if self.kind == "shirley":
-            raise NotImplementedError("Shirley's Floquet is not implemented yet.")
+            from qbran.floquet.shirley import shirley_branch_analysis
+            result = shirley_branch_analysis(self.circuit, drive_freq, drive_amp, self.options)
 
         elif self.kind == "propagator":
             raise NotImplementedError("Floquet analysis with time-evolution prpagator is not implemented yet.")
 
-        return None
+        if save: result.save(filename)
+        return result

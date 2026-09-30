@@ -22,11 +22,7 @@ class Result:
     quasienergies : np.ndarray
         Array of quasienergies.
     hybridization : np.ndarray
-        Array of hybridization metric values (e.g. Theta).
-    partner : np.ndarray
-        Integer array of partner branch/states.
-    partner_overlap : np.ndarray
-        Overlap with partner state.
+        Array of hybridization metric values.
     observables : dict
         Mapping of observable name -> array.
     """
@@ -38,8 +34,6 @@ class Result:
         drive_amp: np.ndarray,
         quasienergies: np.ndarray,
         hybridization: np.ndarray,
-        partner: np.ndarray,
-        partner_overlap: np.ndarray,
         observables: Dict[str, np.ndarray],
         **extra_data,
     ):
@@ -48,8 +42,6 @@ class Result:
         self.drive_amp = np.asarray(drive_amp)
         self.quasienergies = np.asarray(quasienergies)
         self.hybridization = np.asarray(hybridization)
-        self.partner = np.asarray(partner)
-        self.partner_overlap = np.asarray(partner_overlap)
         self.observables = {k: np.asarray(v) for k, v in observables.items()}
 
         self._data: Dict[str, Any] = {
@@ -58,8 +50,6 @@ class Result:
             "drive_amp": self.drive_amp,
             "quasienergies": self.quasienergies,
             "hybridization": self.hybridization,
-            "partner": self.partner,
-            "partner_overlap": self.partner_overlap,
             "observables": self.observables,
         }
 
@@ -118,8 +108,6 @@ class Result:
 
             f.create_dataset("quasienergies", data=self.quasienergies, compression="gzip")
             f.create_dataset("hybridization", data=self.hybridization, compression="gzip")
-            f.create_dataset("partner", data=self.partner, compression="gzip")
-            f.create_dataset("partner_overlap", data=self.partner_overlap, compression="gzip")
 
             obs_grp = f.create_group("observables")
             for obs_name, arr in self.observables.items():
@@ -137,8 +125,6 @@ class Result:
             drive_amp = f["axes/drive_amp"][:]
             quasienergies = f["quasienergies"][:]
             hybridization = f["hybridization"][:]
-            partner = f["partner"][:]
-            partner_overlap = f["partner_overlap"][:]
 
             observables = {}
             if "observables" in f:
@@ -151,8 +137,6 @@ class Result:
             drive_amp=drive_amp,
             quasienergies=quasienergies,
             hybridization=hybridization,
-            partner=partner,
-            partner_overlap=partner_overlap,
             observables=observables,
         )
 
