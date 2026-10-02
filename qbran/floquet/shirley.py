@@ -4,6 +4,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.optimize import linear_sum_assignment
+from scipy.linalg import eigh
 from tqdm import tqdm
 
 from qbran.circuit.components import Transmon
@@ -28,6 +29,51 @@ def id(D: int, sparse: bool = True) -> Union[np.ndarray, sp.csr_matrix]:
     """Identity matrix of size D x D, supporting both dense and sparse formats."""
     if sparse: return sp.eye(D, format='csr')
     else: return np.eye(D)
+
+class ShirleyCache:
+    """Cache frequency-independent quantities used by Shirley analysis."""
+
+    def __init__(self, circuit: HilbertSpace, options: Options):
+        self.circuit = circuit
+        self.options = options
+        self.d = circuit.dimension
+        self.K = options.K
+        self.D = (2 * self.K + 1) * self.d
+        self.sparse = options.sparse
+
+        drive_op = options.drive_op
+        if drive_op is None:
+            tmon = circuit.components[options.drive_idx]
+            if not isinstance(tmon, Transmon):
+                raise ValueError(
+                    f"Component at index {options.drive_idx} is not a Transmon. "
+                    "Please provide a valid drive operator."
+                )
+            drive_op = tmon.n_operator
+
+        self.H0 = circuit.get_hamiltonian(sparse=self.sparse, enforce_real=True)
+        self.V = circuit.embed_operator(drive_op, options.drive_idx, sparse=True)
+
+        n_op = sp.diags(np.arange(self.d)) if self.sparse else np.diag(np.arange(self.d))
+        self.N = kron(id(2 * self.K + 1, self.sparse), n_op, self.sparse)
+        self.H_drive = build_shirley_off_diagonal(self.V, 1.0, self.K, self.sparse)
+
+        H0_dense = self.H0.toarray() if sp.issparse(self.H0) else self.H0
+        self.bare_evals, self.bare_evecs = np.linalg.eigh(H0_dense)
+
+    def initial_states(self, freq: float) -> np.ndarray:
+        """Return folded zero-drive states for a drive frequency."""
+        prev_evecs = np.zeros((self.D, self.d), dtype=complex)
+        for state in range(self.d):
+            harmonic = -int(round(self.bare_evals[state] / freq))
+            harmonic = max(-self.K, min(self.K, harmonic))
+            start_idx = (harmonic + self.K) * self.d
+            prev_evecs[start_idx:start_idx + self.d, state] = self.bare_evecs[:, state]
+        return prev_evecs
+
+    def diagonal(self, freq: float) -> Union[np.ndarray, sp.csr_matrix]:
+        """Return the frequency-dependent diagonal Sambe block."""
+        return build_shirley_diagonal(self.H0, freq, self.K, self.sparse)
 
 def build_shirley_hamiltonian(
     H0: Union[np.ndarray, sp.csr_matrix],
@@ -145,7 +191,7 @@ def diagonalize_shirley(
         if v0 is None: evals, evecs = spla.eigsh(HF, k=k, sigma=1e-6, which='LM')
         else: evals, evecs = spla.eigsh(HF, k=k, sigma=1e-6, which='LM', v0=v0)
     else:
-        evals, evecs = np.linalg.eigh(HF)
+        evals, evecs = eigh(HF, subset_by_index=[0, k-1], check_finite=False)
         idxs = np.argsort(evals)
         evals = evals[idxs]
         evecs = evecs[:, idxs]
@@ -157,41 +203,23 @@ def shirley_single_frequency(
     freq: float,
     amps: Union[np.ndarray, list],
     options: Options,
+    cache: Optional[ShirleyCache] = None,
 ):
-    d = circuit.dimension   # Hilbert space of the circuit
-    K = options.K           # Number of Fourier harmonics
-    D = (2 * K + 1) * d     # Total dimension of the expanded Sambe space
-    sparse = options.sparse
-
+    cache = ShirleyCache(circuit, options) if cache is None else cache
     k = options.k
-    k = d if k is None or options.sparse is False else k
+    k = cache.d if k is None or options.sparse is False else k
 
-    drive_op = options.drive_op
-    drive_idx = options.drive_idx
-    if drive_op is None:
-        tmon = circuit.components[drive_idx]
-        if not isinstance(tmon, Transmon):
-            raise ValueError(f"Component at index {drive_idx} is not a Transmon. Please provide a valid drive operator.")
-        drive_op = tmon.n_operator
-
-    V = circuit.embed_operator(drive_op, options.drive_idx, sparse=True)
-    H0 = circuit.get_hamiltonian(sparse=sparse, enforce_real=True)
-
-    n_op = sp.diags(np.arange(d)) if sparse else np.diag(np.arange(d))
-    N = kron(id(2*K + 1, sparse),  n_op, sparse)
-
-    prev_evecs = init_sorting(H0, freq, d, D, K)
+    prev_evecs = cache.initial_states(freq)
     evecs = None
     quasienergies = np.zeros((len(amps), k), dtype=np.float64)
     excitations   = np.zeros((len(amps), k), dtype=np.float64)
     hybridization = np.zeros((len(amps), k), dtype=np.float64)
 
     # Precompute the diagonal part of the Floquet Hamiltonian
-    H0_s = build_shirley_diagonal(H0, freq, K, sparse)
+    H0_s = cache.diagonal(freq)
 
     for i, amp in enumerate(amps):
-        H_off = build_shirley_off_diagonal(V, amp, K, sparse)
-        HF = H0_s + H_off
+        HF = H0_s + amp * cache.H_drive
 
         evals, evecs = diagonalize_shirley(HF, k, v0=evecs[:, 0] if evecs is not None else None)
 
@@ -203,18 +231,15 @@ def shirley_single_frequency(
         current_evecs = evecs[:, col_ind]
         prev_evecs = current_evecs
 
-        Nexp = np.diag(current_evecs.conj().T @ (N @ current_evecs))
+        Npsi = cache.N @ current_evecs
+        Nexp = np.sum(current_evecs.conj() * Npsi, axis=0).real
 
         if options.hybridization == "susceptibility":
-            dH_dA = build_shirley_off_diagonal(V, 1.0, K, sparse)
-            dH_matrix = current_evecs.conj().T @ (dH_dA @ current_evecs)
-            for n in range(k):
-                for m in range(k):
-                    if n == m:
-                        continue
-                    delta_E = current_evals[m] - current_evals[n]
-                    if np.abs(delta_E) > 1e-12:
-                        hybridization[i, n] += (np.abs(dH_matrix[m, n])**2) / (delta_E**2)
+            dH_matrix = current_evecs.conj().T @ (cache.H_drive @ current_evecs)
+            delta = current_evals[None, :] - current_evals[:, None]
+            numerator = np.abs(dH_matrix) ** 2
+            np.fill_diagonal(delta, np.inf)
+            hybridization[i] = np.sum(numerator / delta**2, axis=1)
 
         quasienergies[i] = current_evals
         excitations[i] = Nexp
@@ -232,6 +257,10 @@ def shirley_branch_analysis(
     options.k = options.k if options.k is not None else circuit.dimension
     options.k = min(options.k, circuit.dimension)
 
+    freq = np.atleast_1d(np.asarray(freq, dtype=float))
+    amps = np.asarray(amps, dtype=float)
+    cache = ShirleyCache(circuit, options)
+
     res = Result(
         metadata   = None,
         drive_freq = freq,
@@ -242,11 +271,11 @@ def shirley_branch_analysis(
             "avg_excitation" : np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
         },
     )
-
-    freq = np.atleast_1d(np.asarray(freq, dtype=float))
-    amps = np.asarray(amps, dtype=float)
+    
     for i, drive_freq in enumerate(tqdm(freq, desc="Branch Analysis", total=len(freq))):
-        quasienergies, excitations, hybridization = shirley_single_frequency(circuit, drive_freq, amps, options)
+        quasienergies, excitations, hybridization = shirley_single_frequency(
+            circuit, drive_freq, amps, options, cache=cache
+        )
         res.quasienergies[i] = quasienergies
         res.observables["avg_excitation"][i] = excitations
         res.hybridization[i] = hybridization
