@@ -22,6 +22,10 @@ class Options:
     drive_op : np.ndarray or sp.csr_matrix, optional
         Drive operator for the component at drive_idx. If None, defaults to the number operator for a Transmon component.  
         $$\hat{H}_{\text{drive}} = \hat{V} \cos{\omega_d t}$$
+    hybridization : str, optional
+        Method for computing hybridization between states: TODO.
+    nsteps : int, optional
+        Number of time steps for the 4th order propagator method, default 20.
     """
 
     def __init__(
@@ -32,6 +36,7 @@ class Options:
         drive_idx: int = 0,
         drive_op: Optional[Union[np.ndarray, sp.csr_matrix]] = None,
         hybridization: str = "susceptibility",
+        nsteps: int = 20,
         **kwargs,
     ):
         self.sparse = bool(sparse)
@@ -41,6 +46,7 @@ class Options:
         self.drive_idx = int(drive_idx)
         self.drive_op = drive_op
         self.hybridization = hybridization.lower()
+        self.nsteps = int(nsteps)
 
         #TODO: check that drive_op is valid for the component at drive_idx
 
@@ -102,7 +108,8 @@ class BranchAnalysis:
             result = shirley_branch_analysis(self.circuit, drive_freq, drive_amp, self.options)
 
         elif self.kind == "propagator":
-            raise NotImplementedError("Floquet analysis with time-evolution prpagator is not implemented yet.")
+            from qbran.floquet.propagator import propagator_branch_analysis
+            result = propagator_branch_analysis(self.circuit, drive_freq, drive_amp, self.options)
 
         if save: result.save(filename)
         return result

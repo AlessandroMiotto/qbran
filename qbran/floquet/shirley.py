@@ -249,7 +249,7 @@ def shirley_single_frequency(
 
 def shirley_branch_analysis(
     circuit: HilbertSpace,
-    freq: float,
+    freq: Union[np.ndarray, list],
     amps: Union[np.ndarray, list],
     options: Options,
 ) -> Result:
