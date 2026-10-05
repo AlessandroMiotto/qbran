@@ -11,6 +11,8 @@ from qbran.circuit.hilbert_space import HilbertSpace
 from qbran.analysis.analysis import Options
 from qbran.analysis.result import Result
 
+from qbran.floquet.hybridization import HybridizationFit
+
 
 class PropagatorCache:
     def __init__(self, circuit: HilbertSpace, options: Options, omega: float):
@@ -80,6 +82,11 @@ class PropagatorCache:
         order_Nrt = np.argsort(init_Nrt)
         self.init_evecs = init_evecs[:, order_Nrt]
 
+        # Parameters for fitting hybridization metric
+        self.fit_cutoff = options.fit_cutoff
+        self.overlap_cutoff = options.overlap_cutoff
+        self.tracked_states = options.tracked_states
+
     def propagator_yoshida(self, amp: float) -> np.ndarray:
         r"""Compute the ropagastor by solving $i dU(t)/dt = H(t)U(t)$ with $U(0) = I$
         using the Trotter-Suzuki decomposition with Yoshida 4th-order correction.
@@ -109,18 +116,21 @@ def propagrator_single_frequency(
     cache.omega = freq
     prev_evecs = cache.init_evecs
 
-    evecs_array = np.zeros((len(amps), cache.dim, cache.dim), dtype=np.complex128)
-
     quasienergies = np.zeros((len(amps), cache.dim), dtype=np.float64)
     excitations   = np.zeros((len(amps), cache.dim), dtype=np.float64)
-    hybridization = np.zeros((len(amps), cache.dim), dtype=np.float64)
+
+    if cache.tracked_states is not None:
+        tracked_states = np.zeros((len(amps), cache.dim, len(cache.tracked_states)), dtype=np.complex128)
+    else:
+        tracked_states = None
 
     for i, amp in enumerate(amps):
         U = cache.propagator_yoshida(amp)
         evals, evecs = eig(U)
 
+        # Adiabatic tracking using previous amplitude
         overlap = np.abs(prev_evecs.conj().T @ evecs)
-        row_ind, col_ind = linear_sum_assignment(-overlap)
+        _, col_ind = linear_sum_assignment(-overlap)
 
         current_evals = evals[col_ind]
         current_evecs = evecs[:, col_ind]
@@ -131,15 +141,16 @@ def propagrator_single_frequency(
         #En = (En + 0.5 * cache.omega) % cache.omega - 0.5 * cache.omega
 
         quasienergies[i] = En
-        excitations[i] = Nexp
-        evecs_array[i] = current_evecs
+        excitations[i]   = Nexp
 
-    dA = amps[1] - amps[0]
-    for i in range(1, len(amps)):
-        overlap = np.abs(np.sum(evecs_array[i].conj() * evecs_array[i-1], axis=0))
-        hybridization[i] = (1 - overlap) / dA
+        if cache.tracked_states is not None:
+            # Diabatic tracking
+            overlap_diab = np.abs(cache.init_evecs.conj().T @ evecs)
+            _, col_diab = linear_sum_assignment(-overlap_diab)
+            diabatic_evecs = evecs[:, col_diab]
+            tracked_states[i] = diabatic_evecs[:, cache.tracked_states]
 
-    return quasienergies, excitations, hybridization
+    return quasienergies, excitations, tracked_states
 
 
 def propagator_branch_analysis(
@@ -158,7 +169,7 @@ def propagator_branch_analysis(
         drive_freq = freq,
         drive_amp  = amps,
         quasienergies = np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
-        hybridization = np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
+        hybridization = np.zeros((len(freq), len(amps), len(options.tracked_states)), dtype=np.float64) if options.tracked_states is not None else None,
         observables={
             "avg_excitation" : np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
         },
@@ -166,11 +177,18 @@ def propagator_branch_analysis(
 
     # TODO: add function to update frequency without rebuilding cache for each frequency
 
+    all_states = np.zeros((len(freq), len(amps), circuit.dimension, len(options.tracked_states)), dtype=np.complex128)
+
     for i, drive_freq in enumerate(tqdm(freq, desc="Branch Analysis", total=len(freq))):
         cache = PropagatorCache(circuit, options, drive_freq)
-        quasienergies, excitations, hybridization = propagrator_single_frequency(drive_freq, amps, cache=cache)
+        quasienergies, excitations, tracked_states = propagrator_single_frequency(drive_freq, amps, cache=cache)
         res.quasienergies[i] = quasienergies
         res.observables["avg_excitation"][i] = excitations
-        res.hybridization[i] = hybridization
+        if tracked_states is not None: all_states[i] = tracked_states
+
+    if options.tracked_states is not None:
+        bare_states = cache.init_evecs[:, options.tracked_states]
+        fitter = HybridizationFit(fit_cutoff=options.fit_cutoff, overlap_cutoff=options.overlap_cutoff)
+        res.hybridization = fitter.compute_hybridization(freq, amps, all_states, bare_states)
 
     return res

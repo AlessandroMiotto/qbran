@@ -33,10 +33,13 @@ class Options:
         sparse: bool = True,
         K: int = 8,
         k: int = None,
+        nsteps: int = 20,
         drive_idx: int = 0,
         drive_op: Optional[Union[np.ndarray, sp.csr_matrix]] = None,
         hybridization: str = "susceptibility",
-        nsteps: int = 20,
+        fit_cutoff: int = 4,
+        overlap_cutoff: float = 0.8,
+        tracked_states: Optional[List[int]] = None,
         **kwargs,
     ):
         self.sparse = bool(sparse)
@@ -47,6 +50,10 @@ class Options:
         self.drive_op = drive_op
         self.hybridization = hybridization.lower()
         self.nsteps = int(nsteps)
+        self.drive_idx = int(drive_idx)
+        self.fit_cutoff = int(fit_cutoff)
+        self.overlap_cutoff = float(overlap_cutoff)
+        self.tracked_states = tracked_states
 
         #TODO: check that drive_op is valid for the component at drive_idx
 
