@@ -20,11 +20,19 @@ class HybridizationFit:
         all_modes: np.ndarray,
         bare_states: np.ndarray,
     ) -> np.ndarray:
+        """Computes hybridization metric Theta across the 2D sweep.
+    Parameters
+    ----------
+    all_modes : shape (W, A, D, k)
+        Tracked mode vectors (D = d for propagator, D = (2K+1)*d for Shirley).
+    bare_states : shape (D, k) or (W, D, k)
+        Zero-drive reference states.
+    """
         W = len(freqs)
         A = len(amps)
-        d, k = bare_states.shape
+        D = all_modes.shape[2]
+        k = all_modes.shape[3]
 
-        # Normalize frequency & amplitude grids for fitting
         span_w = 0.5 * (np.max(freqs) - np.min(freqs))
         w_norm = (freqs - np.mean(freqs)) / (span_w if span_w > 1e-12 else 1.0)
         max_a = np.max(amps)
@@ -34,15 +42,13 @@ class HybridizationFit:
         w_flat = W_grid.ravel()
         a_flat = A_grid.ravel()
 
-        # Guard against rank deficiency when W=1 or small W
         max_m = 0 if W <= 1 else min(W - 1, self.fit_cutoff)
         max_n = min(A - 1, self.fit_cutoff)
 
-        # 2D polynomial terms
         terms = [
-            (m, n) 
-            for m in range(self.fit_cutoff + 1) 
-            for n in range(1, self.fit_cutoff + 1 - m) 
+            (m, n)
+            for m in range(max_m + 1)
+            for n in range(1, max_n + 1)
             if m + n <= self.fit_cutoff
         ]
         n_terms = len(terms)
@@ -50,33 +56,41 @@ class HybridizationFit:
         X = np.column_stack([(w_flat**m) * (a_flat**n) for m, n in terms])
         hybridization = np.zeros((W, A, k), dtype=np.float64)
 
-        for j in range(k):
-            modes_j = all_modes[:, :, :, j].reshape(W * A, d)
-            v0 = bare_states[:, j]
+        is_bare_3d = bare_states.ndim == 3
 
-            # Phase alignment: ensure inner product with bare state is real and positive
-            proj = np.sum(modes_j * v0.conj(), axis=-1)
+        for j in range(k):
+            modes_j = all_modes[:, :, :, j].reshape(W * A, D)
+
+            # Construct bare state grid across (W * A, D)
+            if is_bare_3d:
+                v0_grid = np.repeat(
+                    bare_states[:, None, :, j], A, axis=1
+                ).reshape(W * A, D)
+            else:
+                v0_grid = np.broadcast_to(bare_states[None, :, j], (W * A, D))
+
+            # Sambe inner product gauge fixing
+            proj = np.sum(modes_j * v0_grid.conj(), axis=-1)
             abs_proj = np.abs(proj)
             phase = np.where(abs_proj > 1e-12, proj / abs_proj, 1.0)
             modes_aligned = modes_j / phase[:, None]
 
-            # Mask out resonant avoided crossings
+            # Mask out resonances
             keep = abs_proj > self.overlap_cutoff
-            pert = modes_aligned - v0[None, :]
+            pert = modes_aligned - v0_grid
 
-            # Solve linear least-squares on all non-resonant points across the 2D grid
             if np.count_nonzero(keep) >= n_terms:
                 coeffs, *_ = np.linalg.lstsq(X[keep], pert[keep], rcond=None)
-                ideal_unnorm = v0[None, :] + X @ coeffs
+                ideal_unnorm = v0_grid + X @ coeffs
             else:
-                ideal_unnorm = np.tile(v0, (W * A, 1))
+                ideal_unnorm = v0_grid
 
             norms = np.linalg.norm(ideal_unnorm, axis=-1, keepdims=True)
             ideal_states = ideal_unnorm / np.where(norms > 1e-12, norms, 1.0)
 
-            # Compute overlap and hybridization
+            # Sambe space overlap: exact period-average
             ov = np.abs(np.sum(ideal_states.conj() * modes_aligned, axis=-1))
             theta = 1.0 - ov**2
             hybridization[:, :, j] = theta.reshape(W, A)
-
+            
         return hybridization

@@ -17,15 +17,21 @@ class Options:
         Fourier harmonic cutoff for the Shirley Hamiltonian, default 8.
     k : int, optional
         Number of lowest energy eigenstates to compute upon diagonalization, default None (all eigenstates).
+    nsteps : int, optional
+            Number of time steps for the 4th order propagator method, default 20.
     drive_idx : int, optional
         Index of the component to which the drive is applied, default 0.
     drive_op : np.ndarray or sp.csr_matrix, optional
         Drive operator for the component at drive_idx. If None, defaults to the number operator for a Transmon component.  
         $$\hat{H}_{\text{drive}} = \hat{V} \cos{\omega_d t}$$
     hybridization : str, optional
-        Method for computing hybridization between states: TODO.
-    nsteps : int, optional
-        Number of time steps for the 4th order propagator method, default 20.
+        Method for computing hybridization between states. 'fit' (default) uses Xiao polynomial fitting of the overlap metric. 
+    fit_cutoff : int, optional
+        Maximum polynomial order for hybridization fitting, default 4.
+    overlap_cutoff : float, optional
+        Minimum overlap threshold for hybridization fitting, default 0.8.
+    tracked_states : list of int, optional
+        Indices of states to track for hybridization analysis. If None, the hybridization metric is not computed. Default None.
     """
 
     def __init__(
@@ -36,7 +42,7 @@ class Options:
         nsteps: int = 20,
         drive_idx: int = 0,
         drive_op: Optional[Union[np.ndarray, sp.csr_matrix]] = None,
-        hybridization: str = "susceptibility",
+        hybridization: str = "fit",
         fit_cutoff: int = 4,
         overlap_cutoff: float = 0.8,
         tracked_states: Optional[List[int]] = None,

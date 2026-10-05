@@ -12,6 +12,8 @@ from qbran.circuit.hilbert_space import HilbertSpace
 from qbran.analysis.analysis import Options
 from qbran.analysis.result import Result
 
+from qbran.floquet.hybridization import HybridizationFit
+
 def kron(
     A: Union[np.ndarray, sp.csr_matrix], 
     B: Union[np.ndarray, sp.csr_matrix], 
@@ -60,6 +62,11 @@ class ShirleyCache:
 
         H0_dense = self.H0.toarray() if sp.issparse(self.H0) else self.H0
         self.bare_evals, self.bare_evecs = np.linalg.eigh(H0_dense)
+        self.Nrt = np.diag(np.arange(self.H0.shape[0]))
+        init_Nrt = np.real(np.einsum('ji,jk,ki->i', self.bare_evecs.conj(), self.Nrt, self.bare_evecs))
+        order_Nrt = np.argsort(init_Nrt)
+        self.bare_evals = self.bare_evals[order_Nrt]
+        self.bare_evecs = self.bare_evecs[:, order_Nrt]
 
     def initial_states(self, freq: float) -> np.ndarray:
         """Return folded zero-drive states for a drive frequency."""
@@ -204,23 +211,30 @@ def shirley_single_frequency(
     amps: Union[np.ndarray, list],
     options: Options,
     cache: Optional[ShirleyCache] = None,
-):
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    
     cache = ShirleyCache(circuit, options) if cache is None else cache
     k = options.k
     k = cache.d if k is None or options.sparse is False else k
 
-    prev_evecs = cache.initial_states(freq)
-    evecs = None
+    # Bare folded states in full Sambe space: shape (D, d)
+    init_sambe_states = cache.initial_states(freq)
+    prev_evecs = init_sambe_states.copy()
+
     quasienergies = np.zeros((len(amps), k), dtype=np.float64)
-    excitations   = np.zeros((len(amps), k), dtype=np.float64)
-    hybridization = np.zeros((len(amps), k), dtype=np.float64)
+    excitations = np.zeros((len(amps), k), dtype=np.float64)
+
+    # Cache tracked modes in the FULL Sambe space: shape (A, D, len(tracked_indices))
+    tracked_sambe_states = np.zeros(
+        (len(amps), cache.D, len(options.tracked_states)), dtype=np.complex128
+        ) if options.tracked_states is not None else None
 
     # Precompute the diagonal part of the Floquet Hamiltonian
     H0_s = cache.diagonal(freq)
+    evecs = None
 
     for i, amp in enumerate(amps):
         HF = H0_s + amp * cache.H_drive
-
         evals, evecs = diagonalize_shirley(HF, k, v0=evecs[:, 0] if evecs is not None else None)
 
         # Sort the eigenvectors to track the states
@@ -234,17 +248,17 @@ def shirley_single_frequency(
         Npsi = cache.N @ current_evecs
         Nexp = np.sum(current_evecs.conj() * Npsi, axis=0).real
 
-        if options.hybridization == "susceptibility":
-            dH_matrix = current_evecs.conj().T @ (cache.H_drive @ current_evecs)
-            delta = current_evals[None, :] - current_evals[:, None]
-            numerator = np.abs(dH_matrix) ** 2
-            np.fill_diagonal(delta, np.inf)
-            hybridization[i] = np.sum(numerator / delta**2, axis=1)
-
         quasienergies[i] = current_evals
         excitations[i] = Nexp
 
-    return quasienergies, excitations, hybridization
+        # Diabatic tracking
+        if options.tracked_states is not None:
+            overlap_diab = np.abs(init_sambe_states.conj().T @ evecs)
+            _, col_diab = linear_sum_assignment(-overlap_diab)
+            diabatic_evecs = evecs[:, col_diab]
+            tracked_sambe_states[i] = diabatic_evecs[:, options.tracked_states]
+
+    return quasienergies, excitations, tracked_sambe_states
 
 
 def shirley_branch_analysis(
@@ -266,18 +280,27 @@ def shirley_branch_analysis(
         drive_freq = freq,
         drive_amp  = amps,
         quasienergies = np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
-        hybridization = np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
+        hybridization = np.zeros((len(freq), len(amps), len(options.tracked_states)), dtype=np.float64) if options.tracked_states is not None else None,
         observables={
             "avg_excitation" : np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
         },
     )
+
+    all_states = np.zeros((len(freq), len(amps), cache.D, len(options.tracked_states)), dtype=np.complex128) if options.tracked_states is not None else None
+    all_bare = np.zeros((len(freq), cache.D, len(options.tracked_states)), dtype=np.complex128) if options.tracked_states is not None else None
     
     for i, drive_freq in enumerate(tqdm(freq, desc="Branch Analysis", total=len(freq))):
-        quasienergies, excitations, hybridization = shirley_single_frequency(
+        quasienergies, excitations, tracked_sambe_states = shirley_single_frequency(
             circuit, drive_freq, amps, options, cache=cache
         )
         res.quasienergies[i] = quasienergies
         res.observables["avg_excitation"][i] = excitations
-        res.hybridization[i] = hybridization
+        if options.tracked_states is not None: 
+            all_states[i] = tracked_sambe_states
+            all_bare[i] = cache.initial_states(drive_freq)[:, options.tracked_states]
+
+    if options.tracked_states is not None:
+        fitter = HybridizationFit(options.fit_cutoff, options.overlap_cutoff)
+        res.hybridization = fitter.compute_hybridization(freq, amps, all_states, all_bare)
 
     return res
