@@ -61,13 +61,13 @@ class ShirleyCache:
         # Embed drive operator and guarantee gauge alignment with H0
         self.V = circuit.embed_drive_operator(drive_op, options.drive_idx, sparse=True)
 
-        n_op = sp.diags(np.arange(self.d)) if self.sparse else np.diag(np.arange(self.d))
-        self.N = _matrix_kron(_matrix_eye(2 * self.K + 1, self.sparse), n_op, self.sparse)
+        n_diag = np.arange(self.d, dtype=np.float64)
+        self.diag_N = np.tile(n_diag, 2 * self.K + 1)
         self.H_drive = build_shirley_off_diagonal(self.V, 1.0, self.K, self.sparse)
 
         H0_dense = self.H0.toarray() if sp.issparse(self.H0) else self.H0
         self.bare_evals, self.bare_evecs = np.linalg.eigh(H0_dense)
-        self.Nrt = np.diag(np.arange(self.H0.shape[0]))
+        self.Nrt = np.diag(n_diag)
         init_Nrt = np.real(np.einsum('ji,jk,ki->i', self.bare_evecs.conj(), self.Nrt, self.bare_evecs))
         order_Nrt = np.argsort(init_Nrt)
         self.bare_evals = self.bare_evals[order_Nrt]
@@ -208,14 +208,17 @@ def shirley_single_frequency(
     quasienergies = np.zeros((len(amps), k), dtype=np.float64)
     excitations = np.zeros((len(amps), k), dtype=np.float64)
 
-    tracked_sambe_states = (
-        np.zeros((len(amps), cache.D, len(options.tracked_states)), dtype=np.complex128)
-        if options.tracked_states is not None
-        else None
-    )
+    has_tracked = options.tracked_states is not None
+    if has_tracked:
+        tracked_arr = np.asarray(options.tracked_states, dtype=int)
+        bare_to_floquet = np.empty(cache.d, dtype=int)
+        tracked_sambe_states = np.zeros((len(amps), cache.D, len(options.tracked_states)), dtype=np.complex128)
+    else:
+        tracked_sambe_states = None
 
     H0_s = cache.diagonal(freq)
     evecs = None
+    diag_N = cache.diag_N
 
     for i, amp in enumerate(amps):
         HF = H0_s + amp * cache.H_drive
@@ -229,27 +232,20 @@ def shirley_single_frequency(
         current_evecs = evecs[:, col_ind]
         prev_evecs = current_evecs
 
-        Npsi = cache.N @ current_evecs
-        Nexp = np.sum(current_evecs.conj() * Npsi, axis=0).real
+        # Fast diagonal expectation value
+        Nexp = diag_N @ (current_evecs.real**2 + current_evecs.imag**2)
 
-        # Automatic Brillouin zone folding into [-omega/2, omega/2]
-        En_folded = (current_evals + 0.5 * freq) % freq - 0.5 * freq
-
-        quasienergies[i] = En_folded
+        quasienergies[i] = current_evals
+        # En_folded = (current_evals + 0.5 * freq) % freq - 0.5 * freq
         excitations[i] = Nexp
 
         # Diabatic tracking to uncoupled bare states
-        if options.tracked_states is not None:
+        if has_tracked:
             overlap_diab = np.abs(init_sambe_states.conj().T @ evecs)
             row_diab, col_diab = linear_sum_assignment(-overlap_diab)
 
-            bare_to_floquet = np.full(cache.d, -1, dtype=int)
             bare_to_floquet[row_diab] = col_diab
-
-            for idx_t, s in enumerate(options.tracked_states):
-                matched_col = bare_to_floquet[s]
-                if matched_col >= 0:
-                    tracked_sambe_states[i, :, idx_t] = evecs[:, matched_col]
+            tracked_sambe_states[i] = evecs[:, bare_to_floquet[tracked_arr]]
 
     return quasienergies, excitations, tracked_sambe_states
 

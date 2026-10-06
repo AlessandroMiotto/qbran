@@ -106,7 +106,6 @@ class HilbertSpace:
         self.interactions.append(inter)
         self._evals = None
         self._evecs = None
-        return inter
 
     def embed_operator(
         self,
