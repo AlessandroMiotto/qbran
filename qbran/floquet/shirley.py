@@ -1,5 +1,6 @@
-from typing import Tuple, Optional, Union
+"""Floquet analysis in extended Sambe space using Shirley approach."""
 
+from typing import Tuple, Optional, Union
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -11,10 +12,10 @@ from qbran.circuit.components import Transmon
 from qbran.circuit.hilbert_space import HilbertSpace
 from qbran.analysis.analysis import Options
 from qbran.analysis.result import Result
-
 from qbran.floquet.hybridization import HybridizationFit
 
-def kron(
+
+def _matrix_kron(
     A: Union[np.ndarray, sp.csr_matrix], 
     B: Union[np.ndarray, sp.csr_matrix], 
     sparse: bool
@@ -27,10 +28,13 @@ def kron(
         B = B.toarray() if sp.issparse(B) else B 
         return np.kron(A, B)
 
-def id(D: int, sparse: bool = True) -> Union[np.ndarray, sp.csr_matrix]:
+
+def _matrix_eye(D: int, sparse: bool = True) -> Union[np.ndarray, sp.csr_matrix]:
     """Identity matrix of size D x D, supporting both dense and sparse formats."""
-    if sparse: return sp.eye(D, format='csr')
-    else: return np.eye(D)
+    if sparse:
+        return sp.eye(D, format='csr')
+    return np.eye(D)
+
 
 class ShirleyCache:
     """Cache frequency-independent quantities used by Shirley analysis."""
@@ -49,15 +53,16 @@ class ShirleyCache:
             if not isinstance(tmon, Transmon):
                 raise ValueError(
                     f"Component at index {options.drive_idx} is not a Transmon. "
-                    "Please provide a valid drive operator."
+                    "Please provide an explicit drive_op."
                 )
             drive_op = tmon.n_operator
 
         self.H0 = circuit.get_hamiltonian(sparse=self.sparse, enforce_real=True)
-        self.V = circuit.embed_operator(drive_op, options.drive_idx, sparse=True)
+        # Embed drive operator and guarantee gauge alignment with H0
+        self.V = circuit.embed_drive_operator(drive_op, options.drive_idx, sparse=True)
 
         n_op = sp.diags(np.arange(self.d)) if self.sparse else np.diag(np.arange(self.d))
-        self.N = kron(id(2 * self.K + 1, self.sparse), n_op, self.sparse)
+        self.N = _matrix_kron(_matrix_eye(2 * self.K + 1, self.sparse), n_op, self.sparse)
         self.H_drive = build_shirley_off_diagonal(self.V, 1.0, self.K, self.sparse)
 
         H0_dense = self.H0.toarray() if sp.issparse(self.H0) else self.H0
@@ -82,6 +87,7 @@ class ShirleyCache:
         """Return the frequency-dependent diagonal Sambe block."""
         return build_shirley_diagonal(self.H0, freq, self.K, self.sparse)
 
+
 def build_shirley_hamiltonian(
     H0: Union[np.ndarray, sp.csr_matrix],
     V: Union[np.ndarray, sp.csr_matrix],
@@ -91,46 +97,23 @@ def build_shirley_hamiltonian(
     sparse: bool = True
 ) -> Union[np.ndarray, sp.csr_matrix]:
     r"""Construct the block-tridiagonal Shirley Hamiltonian in frequency domain.
-    The Sambe-Shirley Floquet operator is:
-    $$\mathcal{H}_{F, mn} = (H_0 + m \omega_d I) \delta_{mn} + \frac{A}{2} H_1 (\delta_{m, n+1} + \delta_{m, n-1})$$
+
+    $$\mathcal{H}_{F, mn} = (H_0 + m \omega_d I) \delta_{mn} + \frac{A}{2} V \delta_{m, n+1} + \frac{A}{2} V^\dagger \delta_{m, n-1}$$
     where Fourier harmonics $m, n \in [-K, K]$.
-
-    Parameters
-    ----------
-    H0 : np.ndarray
-        Drift Hamiltonian (diagonal or square matrix), shape `(D, D)`.
-    V : np.ndarray
-        Drive operator, shape `(D, D)`.
-    omega_d : float
-        Drive angular frequency $\omega_d$.
-    amp : float
-        Drive amplitude $A$.
-    K : int, optional
-        Fourier harmonic cutoff $K$, (total $2 K + 1$ blocks).
-    sparse : bool, optional
-        Whether to return a SciPy CSR sparse matrix or dense NumPy array. Default is True.
-
-    Returns
-    -------
-    np.ndarray or sp.csr_matrix
-        Shirley matrix of shape `((2*K+1)*D, (2*K+1)*D)`.
     """
-
-    # Diagonal blocks: H0 + m * omega * I
-    I_K = sp.eye(2*K + 1, format='csr')
-    N_K = sp.diags(np.arange(-K, K + 1), 0, shape=(2*K + 1, 2*K + 1), format='csr')
+    I_K = sp.eye(2 * K + 1, format='csr')
+    N_K = sp.diags(np.arange(-K, K + 1), 0, shape=(2 * K + 1, 2 * K + 1), format='csr')
     HF = sp.kron(I_K, H0, format='csr') + sp.kron(N_K, sp.eye(H0.shape[0], format='csr'), format='csr') * omega
 
     # Off-diagonal blocks: A * V / 2
     off_diag = 0.5 * amp * V
-    sup_diag = sp.diags([1], [1],  shape=(2*K+1, 2*K+1), format='csr')
-    sub_diag = sp.diags([1], [-1], shape=(2*K+1, 2*K+1), format='csr')
+    sup_diag = sp.diags([1], [1],  shape=(2 * K + 1, 2 * K + 1), format='csr')
+    sub_diag = sp.diags([1], [-1], shape=(2 * K + 1, 2 * K + 1), format='csr')
     HF = HF + sp.kron(sup_diag, off_diag.conj().T, format='csr')
-    HF = HF + sp.kron(sub_diag, off_diag         , format='csr')
+    HF = HF + sp.kron(sub_diag, off_diag,          format='csr')
 
-    HF = HF if sparse else HF.toarray()
-    
-    return HF
+    return HF if sparse else HF.toarray()
+
 
 def build_shirley_diagonal(
     H0: Union[np.ndarray, sp.csr_matrix],
@@ -140,16 +123,15 @@ def build_shirley_diagonal(
 ) -> Union[np.ndarray, sp.csr_matrix]:
     """Construct the diagonal part of the Shirley Hamiltonian."""
     if sparse:
-        I_K = sp.eye(2*K + 1, format='csr')
-        N_K = sp.diags(np.arange(-K, K + 1), 0, shape=(2*K + 1, 2*K + 1), format='csr')
-        H0_s = sp.kron(I_K, H0, format='csr') + sp.kron(N_K, sp.eye(H0.shape[0], format='csr'), format='csr') * omega
-        return H0_s
+        I_K = sp.eye(2 * K + 1, format='csr')
+        N_K = sp.diags(np.arange(-K, K + 1), 0, shape=(2 * K + 1, 2 * K + 1), format='csr')
+        return sp.kron(I_K, H0, format='csr') + sp.kron(N_K, sp.eye(H0.shape[0], format='csr'), format='csr') * omega
     else:
         H0 = H0.toarray() if sp.issparse(H0) else H0
-        I_K = np.eye(2*K + 1)
+        I_K = np.eye(2 * K + 1)
         N_K = np.diag(np.arange(-K, K + 1))
-        H0_s = np.kron(I_K, H0) + np.kron(N_K, np.eye(H0.shape[0])) * omega
-        return H0_s
+        return np.kron(I_K, H0) + np.kron(N_K, np.eye(H0.shape[0])) * omega
+
 
 def build_shirley_off_diagonal(
     V: Union[np.ndarray, sp.csr_matrix],
@@ -159,20 +141,20 @@ def build_shirley_off_diagonal(
 ) -> Union[np.ndarray, sp.csr_matrix]:
     """Construct the off-diagonal part of the Shirley Hamiltonian."""
     off_diag = 0.5 * amp * V
-    sup_diag = sp.diags([1], [1],  shape=(2*K+1, 2*K+1), format='csr')
-    sub_diag = sp.diags([1], [-1], shape=(2*K+1, 2*K+1), format='csr')
+    sup_diag = sp.diags([1], [1],  shape=(2 * K + 1, 2 * K + 1), format='csr')
+    sub_diag = sp.diags([1], [-1], shape=(2 * K + 1, 2 * K + 1), format='csr')
     HF_off = sp.kron(sup_diag, off_diag.conj().T, format='csr') + sp.kron(sub_diag, off_diag, format='csr')
-    HF_off = HF_off if sparse else HF_off.toarray()
-    return HF_off
+    return HF_off if sparse else HF_off.toarray()
+
 
 def init_sorting(
-    H0 : Union[np.ndarray, sp.csr_matrix],
-    omega : float,
-    d : int,
+    H0: Union[np.ndarray, sp.csr_matrix],
+    omega: float,
+    d: int,
     D: int,
     K: int,
 ) -> np.ndarray:
-    """Construct the ideal folded states at A=0 to lock the sorting"""
+    """Construct the ideal folded states at A=0 to lock the sorting."""
     H0_dense = H0.toarray() if sp.issparse(H0) else H0
     eigvals, eigvecs = np.linalg.eigh(H0_dense)
 
@@ -181,29 +163,31 @@ def init_sorting(
         k_m = -int(round(eigvals[m] / omega))
         k_m = max(-K, min(K, k_m))
 
-        # Place the eigenvector in the correct block of the Sambe space
         start_idx = (k_m + K) * d
         end_idx = start_idx + d
         prev_evecs[start_idx:end_idx, m] = eigvecs[:, m]
     return prev_evecs
+
 
 def diagonalize_shirley(
     HF: Union[np.ndarray, sp.csr_matrix],
     k: int,
     v0: Optional[np.ndarray] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Diagonalize the Shirley Hamiltonian and return the lowest k eigenvalues and eigenvectors."""
-
+    """Diagonalize the Shirley Hamiltonian and return lowest k eigenvalues and eigenvectors."""
     if sp.issparse(HF):
-        if v0 is None: evals, evecs = spla.eigsh(HF, k=k, sigma=1e-6, which='LM')
-        else: evals, evecs = spla.eigsh(HF, k=k, sigma=1e-6, which='LM', v0=v0)
+        if v0 is None:
+            evals, evecs = spla.eigsh(HF, k=k, sigma=1e-6, which='LM')
+        else:
+            evals, evecs = spla.eigsh(HF, k=k, sigma=1e-6, which='LM', v0=v0)
     else:
-        evals, evecs = eigh(HF, subset_by_index=[0, k-1], check_finite=False)
+        evals, evecs = eigh(HF, subset_by_index=[0, k - 1], check_finite=False)
         idxs = np.argsort(evals)
         evals = evals[idxs]
         evecs = evecs[:, idxs]
 
     return evals, evecs
+
 
 def shirley_single_frequency(
     circuit: HilbertSpace,
@@ -211,8 +195,8 @@ def shirley_single_frequency(
     amps: Union[np.ndarray, list],
     options: Options,
     cache: Optional[ShirleyCache] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    """Compute quasienergies, excitations, and Sambe modes for a single frequency across drive amplitudes."""
     cache = ShirleyCache(circuit, options) if cache is None else cache
     k = options.k
     k = cache.d if k is None or options.sparse is False else k
@@ -224,12 +208,12 @@ def shirley_single_frequency(
     quasienergies = np.zeros((len(amps), k), dtype=np.float64)
     excitations = np.zeros((len(amps), k), dtype=np.float64)
 
-    # Cache tracked modes in the FULL Sambe space: shape (A, D, len(tracked_indices))
-    tracked_sambe_states = np.zeros(
-        (len(amps), cache.D, len(options.tracked_states)), dtype=np.complex128
-        ) if options.tracked_states is not None else None
+    tracked_sambe_states = (
+        np.zeros((len(amps), cache.D, len(options.tracked_states)), dtype=np.complex128)
+        if options.tracked_states is not None
+        else None
+    )
 
-    # Precompute the diagonal part of the Floquet Hamiltonian
     H0_s = cache.diagonal(freq)
     evecs = None
 
@@ -237,7 +221,7 @@ def shirley_single_frequency(
         HF = H0_s + amp * cache.H_drive
         evals, evecs = diagonalize_shirley(HF, k, v0=evecs[:, 0] if evecs is not None else None)
 
-        # Sort the eigenvectors to track the states
+        # Adiabatic state tracking against previous amplitude
         overlap = np.abs(prev_evecs.conj().T @ evecs)
         _, col_ind = linear_sum_assignment(-overlap)
 
@@ -248,15 +232,24 @@ def shirley_single_frequency(
         Npsi = cache.N @ current_evecs
         Nexp = np.sum(current_evecs.conj() * Npsi, axis=0).real
 
-        quasienergies[i] = current_evals
+        # Automatic Brillouin zone folding into [-omega/2, omega/2]
+        En_folded = (current_evals + 0.5 * freq) % freq - 0.5 * freq
+
+        quasienergies[i] = En_folded
         excitations[i] = Nexp
 
-        # Diabatic tracking
+        # Diabatic tracking to uncoupled bare states
         if options.tracked_states is not None:
             overlap_diab = np.abs(init_sambe_states.conj().T @ evecs)
-            _, col_diab = linear_sum_assignment(-overlap_diab)
-            diabatic_evecs = evecs[:, col_diab]
-            tracked_sambe_states[i] = diabatic_evecs[:, options.tracked_states]
+            row_diab, col_diab = linear_sum_assignment(-overlap_diab)
+
+            bare_to_floquet = np.full(cache.d, -1, dtype=int)
+            bare_to_floquet[row_diab] = col_diab
+
+            for idx_t, s in enumerate(options.tracked_states):
+                matched_col = bare_to_floquet[s]
+                if matched_col >= 0:
+                    tracked_sambe_states[i, :, idx_t] = evecs[:, matched_col]
 
     return quasienergies, excitations, tracked_sambe_states
 
@@ -267,7 +260,7 @@ def shirley_branch_analysis(
     amps: Union[np.ndarray, list],
     options: Options,
 ) -> Result:
-
+    """Executes Floquet branch analysis using extended Sambe-Shirley space."""
     options.k = options.k if options.k is not None else circuit.dimension
     options.k = min(options.k, circuit.dimension)
 
@@ -275,31 +268,43 @@ def shirley_branch_analysis(
     amps = np.asarray(amps, dtype=float)
     cache = ShirleyCache(circuit, options)
 
+    show_progress = getattr(options, "progress_bar", True)
+    has_tracked = options.tracked_states is not None
+    num_tracked = len(options.tracked_states) if has_tracked else 0
+
     res = Result(
-        metadata   = None,
-        drive_freq = freq,
-        drive_amp  = amps,
-        quasienergies = np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
-        hybridization = np.zeros((len(freq), len(amps), len(options.tracked_states)), dtype=np.float64) if options.tracked_states is not None else None,
+        metadata=None,  # Populated by BranchAnalysis.run
+        drive_freq=freq,
+        drive_amp=amps,
+        quasienergies=np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
+        hybridization=np.zeros((len(freq), len(amps), num_tracked), dtype=np.float64) if has_tracked else None,
         observables={
-            "avg_excitation" : np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
+            "avg_excitation": np.zeros((len(freq), len(amps), options.k), dtype=np.float64),
         },
     )
 
-    all_states = np.zeros((len(freq), len(amps), cache.D, len(options.tracked_states)), dtype=np.complex128) if options.tracked_states is not None else None
-    all_bare = np.zeros((len(freq), cache.D, len(options.tracked_states)), dtype=np.complex128) if options.tracked_states is not None else None
-    
-    for i, drive_freq in enumerate(tqdm(freq, desc="Branch Analysis", total=len(freq))):
+    all_states = (
+        np.zeros((len(freq), len(amps), cache.D, num_tracked), dtype=np.complex128)
+        if has_tracked
+        else None
+    )
+    all_bare = (
+        np.zeros((len(freq), cache.D, num_tracked), dtype=np.complex128)
+        if has_tracked
+        else None
+    )
+
+    for i, drive_freq in enumerate(tqdm(freq, desc="Branch Analysis", total=len(freq), disable=not show_progress)):
         quasienergies, excitations, tracked_sambe_states = shirley_single_frequency(
             circuit, drive_freq, amps, options, cache=cache
         )
         res.quasienergies[i] = quasienergies
         res.observables["avg_excitation"][i] = excitations
-        if options.tracked_states is not None: 
+        if has_tracked and tracked_sambe_states is not None:
             all_states[i] = tracked_sambe_states
             all_bare[i] = cache.initial_states(drive_freq)[:, options.tracked_states]
 
-    if options.tracked_states is not None:
+    if has_tracked and all_states is not None:
         fitter = HybridizationFit(options.fit_cutoff, options.overlap_cutoff)
         res.hybridization = fitter.compute_hybridization(freq, amps, all_states, all_bare)
 

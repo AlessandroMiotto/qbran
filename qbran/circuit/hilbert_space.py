@@ -1,28 +1,35 @@
-"""Joint Hilbert space of the circuit"""
+"""Joint Hilbert space of the circuit."""
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union, Dict
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 from qbran.circuit.components import Component, Transmon, Resonator
 from qbran.circuit.interactions import Interaction
-from qbran.core.gauge import make_real_gauge, apply_gauge_to_evecs, is_strictly_real
+from qbran.core.gauge import (
+    make_real_gauge,
+    apply_gauge_to_evecs,
+    apply_gauge_to_operator,
+    is_strictly_real,
+)
+
 
 class HilbertSpace:
     """Joint Hilbert space of the circuit.
 
-    Parameters:
+    Parameters
     ----------
     components : List[Component]
         List of circuit components.
     sparse : bool, optional
-            Whether to use sparse matrices for the Hamiltonian. Default is True.
+        Whether to use sparse matrices for the Hamiltonian by default. Default is True.
     k : int, optional
-        Number of lowest energy eigenstates to compute upon diagonalization. Default is None, which means all eigenstates will be computed.
+        Number of lowest energy eigenstates to compute upon diagonalization.
+        Default is None (all eigenstates).
     """
 
-    def __init__(self, components: List[Component], sparse: bool = True, k: int = None):
+    def __init__(self, components: List[Component], sparse: bool = True, k: Optional[int] = None):
         self.components = list(components)
         self.sparse = bool(sparse)
         self.interactions: List[Interaction] = []
@@ -30,8 +37,7 @@ class HilbertSpace:
         self.dims = [comp.truncated_dim for comp in self.components]
         self.dimension = int(np.prod(self.dims))
         self.k = k if k is not None else self.dimension
-
-        self.k = min(self.k, self.dimension)  # Ensure k does not exceed the total dimension
+        self.k = min(self.k, self.dimension)
 
         # Precompute strides for flat product index conversions
         self._strides = []
@@ -42,7 +48,7 @@ class HilbertSpace:
         self._evals: Optional[np.ndarray] = None
         self._evecs: Optional[np.ndarray] = None
         self._is_real: bool = True
-        self._gauge_phases: Optional[np.ndarray] = None
+        self._gauge_D: Optional[np.ndarray] = None
 
     def add_interaction(
         self,
@@ -52,10 +58,10 @@ class HilbertSpace:
         """Add a pairwise interaction between two subsystems.
 
         Accepts flexible signatures:
-            add_interaction(g, component1, component2, kind='capacitive', ...)
-            add_interaction(component1, component2, g=0.12, ...)
-            add_interaction(component1, component2, 0.12, ...)
-            add_interaction(g=0.12, component1=tmon, component2=res, ...)
+            add_interaction(component1, component2, g=0.12, kind='capacitive')
+            add_interaction(component1, component2, 0.12)
+            add_interaction(g=0.12, component1=tmon, component2=res)
+            add_interaction(0.12, tmon, res)
         """
         g_val = kwargs.get('g', None)
         c1 = kwargs.get('component1', kwargs.get('c1', None))
@@ -100,38 +106,42 @@ class HilbertSpace:
         self.interactions.append(inter)
         self._evals = None
         self._evecs = None
+        return inter
 
     def embed_operator(
-        self, op: Union[np.ndarray, sp.csr_matrix], 
+        self,
+        op: Union[np.ndarray, sp.csr_matrix],
         component_idx: int,
-        sparse: bool = True,
+        sparse: Optional[bool] = None,
     ) -> Union[np.ndarray, sp.csr_matrix]:
         """Embed a 1-body operator into the joint Hilbert space of the circuit."""
-        kron_func = sp.kron if sparse else np.kron
-        eye_func = (lambda d: sp.eye(d, format='csr', dtype=op.dtype)) if sparse else (lambda d: np.eye(d, dtype=op.dtype))
+        is_sp = self.sparse if sparse is None else bool(sparse)
+        kron_func = sp.kron if is_sp else np.kron
+        eye_func = (lambda d: sp.eye(d, format='csr', dtype=op.dtype)) if is_sp else (lambda d: np.eye(d, dtype=op.dtype))
 
         result = None
         for i, sub in enumerate(self.components):
             curr_op = op if i == component_idx else eye_func(sub.truncated_dim)
-            if sparse and not sp.issparse(curr_op):
+            if is_sp and not sp.issparse(curr_op):
                 curr_op = sp.csr_matrix(curr_op)
             result = curr_op if result is None else kron_func(result, curr_op)
 
-        if sparse and not sp.isspmatrix_csr(result):
+        if is_sp and not sp.isspmatrix_csr(result):
             result = result.tocsr()
         return result
 
-    def emmbed_2body(
+    def embed_2body(
         self,
         op1: Union[np.ndarray, sp.csr_matrix],
         idx1: int,
         op2: Union[np.ndarray, sp.csr_matrix],
         idx2: int,
-        sparse: bool = True,
+        sparse: Optional[bool] = None,
     ) -> Union[np.ndarray, sp.csr_matrix]:
         """Embed a 2-body operator into the joint Hilbert space of the circuit."""
-        kron_func = sp.kron if sparse else np.kron
-        eye_func = (lambda d: sp.eye(d, format='csr', dtype=op1.dtype)) if sparse else (lambda d: np.eye(d, dtype=op1.dtype))
+        is_sp = self.sparse if sparse is None else bool(sparse)
+        kron_func = sp.kron if is_sp else np.kron
+        eye_func = (lambda d: sp.eye(d, format='csr', dtype=op1.dtype)) if is_sp else (lambda d: np.eye(d, dtype=op1.dtype))
 
         result = None
         for i, sub in enumerate(self.components):
@@ -141,11 +151,11 @@ class HilbertSpace:
                 curr_op = op2
             else:
                 curr_op = eye_func(sub.truncated_dim)
-            if sparse and not sp.issparse(curr_op):
+            if is_sp and not sp.issparse(curr_op):
                 curr_op = sp.csr_matrix(curr_op)
             result = curr_op if result is None else kron_func(result, curr_op)
 
-        if sparse and not sp.isspmatrix_csr(result):
+        if is_sp and not sp.isspmatrix_csr(result):
             result = result.tocsr()
         return result
 
@@ -159,12 +169,12 @@ class HilbertSpace:
         Parameters
         ----------
         sparse : bool, optional
-            Whether to return sparse CSR or dense matrix.
+            Whether to return sparse CSR or dense matrix. Defaults to self.sparse.
         enforce_real : bool, optional
             Whether to automatically apply unitary gauge transformation to guarantee
             a strictly real symmetric (float64) Hamiltonian. Default is True.
         """
-        is_sparse = self.sparse
+        is_sparse = self.sparse if sparse is None else bool(sparse)
 
         # Bare hamiltonian
         H_total = None
@@ -178,7 +188,7 @@ class HilbertSpace:
             op1, op2, g = inter.get_operator()
             idx1 = self.components.index(inter.component1)
             idx2 = self.components.index(inter.component2)
-            h_interaction = self.emmbed_2body(op1, idx1, op2, idx2, sparse=is_sparse)
+            h_interaction = self.embed_2body(op1, idx1, op2, idx2, sparse=is_sparse)
             H_total = H_total + g * h_interaction
 
         if enforce_real:
@@ -192,8 +202,21 @@ class HilbertSpace:
         self._is_real = is_strictly_real(H_total)
         return H_total
 
+    def embed_drive_operator(
+        self,
+        drive_op: Union[np.ndarray, sp.csr_matrix],
+        component_idx: int,
+        sparse: Optional[bool] = None,
+    ) -> Union[np.ndarray, sp.csr_matrix]:
+        """Embed drive operator and align with circuit gauge representation."""
+        is_sp = self.sparse if sparse is None else bool(sparse)
+        V = self.embed_operator(drive_op, component_idx=component_idx, sparse=is_sp)
+        if self._is_real and self._gauge_D is not None:
+            V = apply_gauge_to_operator(V, self._gauge_D)
+        return V
+
     def diagonalize(self, k: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
-        """Diagonalize the joint Hamiltonian of the circuit and return the lowest k eigenvalues and eigenvectors."""
+        """Diagonalize the joint Hamiltonian and return lowest k eigenvalues and eigenvectors."""
         k_val = self.k if k is None else min(int(k), self.dimension)
         H = self.get_hamiltonian(sparse=self.sparse, enforce_real=True)
 
@@ -217,6 +240,67 @@ class HilbertSpace:
 
         return self._evals, self._evecs
 
+    def state_to_index(self, *state_indices, **named_indices) -> int:
+        """Convert subsystem state numbers (e.g., tmon=4, res=1) to flat product-basis index.
+
+        Examples
+        --------
+        >>> circuit.state_to_index(4, 1)  # if dims=[13, 3] -> 4 * 3 + 1 = 13
+        >>> circuit.state_to_index(tmon=4, res=1)
+        """
+        if state_indices and named_indices:
+            raise ValueError("Provide either positional state indices or keyword arguments, not both.")
+
+        if named_indices:
+            indices = []
+            for comp in self.components:
+                cname = comp.name.lower()
+                val = None
+                for k, v in named_indices.items():
+                    k_low = k.lower()
+                    if k_low == cname or k_low in cname or cname in k_low:
+                        val = v
+                        break
+                    if ("tmon" in k_low or "qubit" in k_low or "q" == k_low) and "transmon" in cname:
+                        val = v
+                        break
+                    if ("res" in k_low or "cav" in k_low or "osc" in k_low) and "resonator" in cname:
+                        val = v
+                        break
+                if val is None:
+                    raise KeyError(f"Missing state for component '{comp.name}'")
+                indices.append(val)
+        else:
+            indices = list(state_indices)
+
+        if len(indices) != len(self.components):
+            raise ValueError(f"Expected {len(self.components)} state indices, got {len(indices)}")
+
+        flat_idx = 0
+        for idx, stride, dim in zip(indices, self._strides, self.dims):
+            if not (0 <= idx < dim):
+                raise IndexError(f"State index {idx} out of range [0, {dim - 1}]")
+            flat_idx += idx * stride
+        return flat_idx
+
+    def index_to_state(self, flat_index: int) -> Tuple[int, ...]:
+        """Convert a flat product-basis index into tuple of subsystem state numbers."""
+        if not (0 <= flat_index < self.dimension):
+            raise IndexError(f"Flat index {flat_index} out of range [0, {self.dimension - 1}]")
+
+        states = []
+        rem = flat_index
+        for stride in self._strides:
+            states.append(rem // stride)
+            rem %= stride
+        return tuple(states)
+
+    def state_label(self, flat_index: int) -> str:
+        """Return formatted ket label string (e.g. '|4, 1>') for a flat index."""
+        states = self.index_to_state(flat_index)
+        states_str = ", ".join(str(s) for s in states)
+        return f"|{states_str}>"
+
     def __getitem__(self, key: str) -> np.ndarray:
         """Dictionary access for evals and evecs."""
         if self._evals is None or self._evecs is None:
@@ -227,12 +311,15 @@ class HilbertSpace:
             return self._evecs
         raise KeyError(f"Invalid key '{key}'. Valid keys are 'evals' and 'evecs'.")
 
-    def BranchAnalysis(
+    def branch_analysis(
         self,
-        kind: str = "quantum",
+        kind: str = "shirley",
         options: Optional[Any] = None,
         **kwargs
     ) -> Any:
         """Returns a BranchAnalysis engine configured for this circuit."""
         from qbran.analysis.analysis import BranchAnalysis
         return BranchAnalysis(circuit=self, kind=kind, options=options, **kwargs)
+
+    # Backward compatibility alias
+    BranchAnalysis = branch_analysis

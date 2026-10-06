@@ -15,6 +15,7 @@ from qbran.core.gauge import (
     make_real_gauge,
     is_strictly_real,
     apply_gauge_to_evecs,
+    apply_gauge_to_operator,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "make_real_gauge",
     "is_strictly_real",
     "apply_gauge_to_evecs",
+    "apply_gauge_to_operator",
 ]

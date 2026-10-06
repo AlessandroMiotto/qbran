@@ -1,12 +1,13 @@
 """Result container for parameter sweeps and branch analyses with HDF5 persistence."""
 
-from typing import Dict, Any, Optional, Iterator
+import json
+from typing import Dict, Any, Optional
 import numpy as np
 import h5py
 
 
 class Result:
-    """Stores the full physical dataset of a 2D Floquet or Branch parameter sweep.
+    """Stores the full physical dataset of a 2D Floquet parameter sweep.
 
     Supports both dictionary indexing (`results['avg_excitation']`) and attribute
     access (`results.avg_excitation`).
@@ -14,34 +15,35 @@ class Result:
     Attributes
     ----------
     metadata : dict
-        Chip parameters, options, subsystem properties, timestamps.
+        Circuit parameters, solver options, subsystem properties, timestamp.
     drive_freq : np.ndarray
         1D array of swept drive frequencies (GHz).
     drive_amp : np.ndarray
-        1D array of swept drive amplitudes (n_photons or xi).
+        1D array of swept drive amplitudes.
     quasienergies : np.ndarray
-        Array of quasienergies.
-    hybridization : np.ndarray
-        Array of hybridization metric values.
+        Array of quasienergies of shape (len(drive_freq), len(drive_amp), k).
+    hybridization : np.ndarray or None
+        Array of hybridization metric values of shape (len(drive_freq), len(drive_amp), num_tracked),
+        or None if tracked_states was not specified.
     observables : dict
         Mapping of observable name -> array.
     """
 
     def __init__(
         self,
-        metadata: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]],
         drive_freq: np.ndarray,
         drive_amp: np.ndarray,
         quasienergies: np.ndarray,
-        hybridization: np.ndarray,
+        hybridization: Optional[np.ndarray],
         observables: Dict[str, np.ndarray],
         **extra_data,
     ):
-        self.metadata = metadata
+        self.metadata = dict(metadata) if metadata is not None else {}
         self.drive_freq = np.asarray(drive_freq)
         self.drive_amp = np.asarray(drive_amp)
         self.quasienergies = np.asarray(quasienergies)
-        self.hybridization = np.asarray(hybridization)
+        self.hybridization = np.asarray(hybridization) if hybridization is not None else None
         self.observables = {k: np.asarray(v) for k, v in observables.items()}
 
         self._data: Dict[str, Any] = {
@@ -53,15 +55,17 @@ class Result:
             "observables": self.observables,
         }
 
-        # Also pull observables to top-level for convenience
+        # Expose observables as attributes if not conflicting with existing methods
+        protected_attrs = set(dir(self))
         for k, v in self.observables.items():
             self._data[k] = v
-            setattr(self, k, v)
+            if k not in protected_attrs:
+                setattr(self, k, v)
 
-        # Merge any extra quantum branch outputs
         for k, v in extra_data.items():
             self._data[k] = v
-            setattr(self, k, v)
+            if k not in protected_attrs:
+                setattr(self, k, v)
 
     def __getitem__(self, key: str) -> Any:
         if key in self._data:
@@ -72,7 +76,8 @@ class Result:
 
     def __setitem__(self, key: str, value: Any) -> None:
         self._data[key] = value
-        setattr(self, key, value)
+        if key not in dir(self):
+            setattr(self, key, value)
 
     def __contains__(self, key: str) -> bool:
         return key in self._data or key in self.observables
@@ -98,7 +103,10 @@ class Result:
             meta_grp = f.create_group("metadata")
             for k, v in self.metadata.items():
                 try:
-                    meta_grp.attrs[k] = v
+                    if isinstance(v, (dict, list)):
+                        meta_grp.attrs[k] = json.dumps(v)
+                    else:
+                        meta_grp.attrs[k] = v
                 except Exception:
                     meta_grp.attrs[k] = str(v)
 
@@ -107,7 +115,9 @@ class Result:
             axes_grp.create_dataset("drive_amp", data=self.drive_amp, compression="gzip")
 
             f.create_dataset("quasienergies", data=self.quasienergies, compression="gzip")
-            f.create_dataset("hybridization", data=self.hybridization, compression="gzip")
+
+            if self.hybridization is not None:
+                f.create_dataset("hybridization", data=self.hybridization, compression="gzip")
 
             obs_grp = f.create_group("observables")
             for obs_name, arr in self.observables.items():
@@ -120,11 +130,22 @@ class Result:
             filename += ".h5"
 
         with h5py.File(filename, "r") as f:
-            metadata = dict(f["metadata"].attrs)
+            metadata = {}
+            if "metadata" in f:
+                for k, v in f["metadata"].attrs.items():
+                    if isinstance(v, str) and (v.startswith("{") or v.startswith("[")):
+                        try:
+                            metadata[k] = json.loads(v)
+                            continue
+                        except Exception:
+                            pass
+                    metadata[k] = v
+
             drive_freq = f["axes/drive_freq"][:]
             drive_amp = f["axes/drive_amp"][:]
             quasienergies = f["quasienergies"][:]
-            hybridization = f["hybridization"][:]
+
+            hybridization = f["hybridization"][:] if "hybridization" in f else None
 
             observables = {}
             if "observables" in f:

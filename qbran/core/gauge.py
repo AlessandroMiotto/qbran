@@ -5,6 +5,7 @@ Hamiltonians into strictly real symmetric (float64) representations for arbitrar
 topologies (trees, linear chains, star networks, multi-transmon, multi-resonator).
 """
 
+from collections import deque
 from typing import Tuple, Union, Optional
 import numpy as np
 import scipy.sparse as sp
@@ -68,7 +69,7 @@ def make_real_gauge(
             H_real = H_real.toarray()
         return H_real, np.ones(dim, dtype=np.complex128), True
 
-    # Graph Breadth-First Search (BFS) for spanning tree gauge phases
+    # Graph Breadth-First Search (BFS) for spanning tree gauge phases using deque
     csr = H.tocsr() if sp.issparse(H) else sp.csr_matrix(H)
     visited = np.zeros(dim, dtype=bool)
     theta = np.zeros(dim, dtype=np.float64)
@@ -77,10 +78,10 @@ def make_real_gauge(
         if visited[start_node]:
             continue
         visited[start_node] = True
-        queue = [start_node]
+        queue = deque([start_node])
 
         while queue:
-            u = queue.pop(0)
+            u = queue.popleft()
             row = csr.getrow(u)
             for v, val in zip(row.indices, row.data):
                 if u == v or abs(val) < tol:
@@ -97,7 +98,8 @@ def make_real_gauge(
                 else:
                     # Check cycle consistency (loop phase must be integer multiple of pi)
                     diff = (phase_target - theta[v]) / np.pi
-                    if abs(diff - round(diff)) > 1e-4:
+                    cycle_tol = max(1e-4, 100 * tol)
+                    if abs(diff - round(diff)) > cycle_tol:
                         # Non-zero gauge-invariant loop flux obstructs real representation
                         H_out = H if is_sp == sp.issparse(H) else (H.tocsr() if is_sp else H.toarray())
                         return H_out, np.ones(dim, dtype=np.complex128), False
@@ -118,6 +120,19 @@ def make_real_gauge(
         if is_sp:
             H_real = sp.csr_matrix(H_real)
         return H_real, D, True
+
+
+def apply_gauge_to_operator(
+    op: Union[np.ndarray, sp.csr_matrix],
+    D: np.ndarray
+) -> Union[np.ndarray, sp.csr_matrix]:
+    """Transform an operator into the real-gauge representation: O_gauged = D^dagger @ O @ D."""
+    if sp.issparse(op):
+        D_diag = sp.diags(D, 0, format="csr", dtype=np.complex128)
+        D_conj = sp.diags(D.conj(), 0, format="csr", dtype=np.complex128)
+        return D_conj @ op @ D_diag
+    else:
+        return D.conj()[:, None] * op * D[None, :]
 
 
 def apply_gauge_to_evecs(evecs: np.ndarray, D: np.ndarray, inverse: bool = False) -> np.ndarray:
