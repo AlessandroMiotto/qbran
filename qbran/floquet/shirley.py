@@ -1,5 +1,8 @@
 """Floquet analysis in extended Sambe space using Shirley approach."""
 
+import os
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Tuple, Optional, Union
 import numpy as np
 import scipy.sparse as sp
@@ -250,6 +253,68 @@ def shirley_single_frequency(
     return quasienergies, excitations, tracked_sambe_states
 
 
+def _worker_init():
+    """Pin threads in subprocesses to avoid BLAS thread oversubscription."""
+    import glob
+    import ctypes
+
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["SCIPY_OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+    try:
+        import site
+        search_dirs = site.getsitepackages() if hasattr(site, "getsitepackages") else []
+        for sdir in search_dirs:
+            for so in glob.glob(os.path.join(sdir, "*libs", "*openblas*.so")):
+                try:
+                    dll = ctypes.CDLL(so)
+                    for fn in ["scipy_openblas_set_num_threads", "scipy_openblas_set_num_threads64_", "openblas_set_num_threads"]:
+                        if hasattr(dll, fn):
+                            getattr(dll, fn)(1)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _shirley_worker_task(args):
+    """Worker task for multi-core Shirley frequency sweeping."""
+    f_idx, circuit, drive_freq, amps, options, cache = args
+    quasienergies, excitations, tracked_sambe_states = shirley_single_frequency(
+        circuit, drive_freq, amps, options, cache=cache
+    )
+    bare_init = cache.initial_states(drive_freq)[:, options.tracked_states] if options.tracked_states is not None else None
+    return f_idx, quasienergies, excitations, tracked_sambe_states, bare_init
+
+
+def _warn_memory_headroom(n_workers: int):
+    """Inform user if available system memory is low relative to requested worker count."""
+    if n_workers <= 1:
+        return
+    try:
+        import os
+        import warnings
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        avail_pages = os.sysconf("SC_AVPHYS_PAGES")
+        avail_gb = (page_size * avail_pages) / (1024**3)
+        est_per_worker = 0.3
+        req_gb = n_workers * est_per_worker
+        if req_gb > avail_gb:
+            warnings.warn(
+                f"Requested {n_workers} workers for Shirley analysis may require ~{req_gb:.1f} GB RAM, "
+                f"but only ~{avail_gb:.1f} GB is currently free. "
+                "If system freezes or experiences memory pressure, consider reducing n_workers.",
+                ResourceWarning,
+                stacklevel=2,
+            )
+    except Exception:
+        pass
+
+
 def shirley_branch_analysis(
     circuit: HilbertSpace,
     freq: Union[np.ndarray, list],
@@ -267,6 +332,10 @@ def shirley_branch_analysis(
     show_progress = getattr(options, "progress_bar", True)
     has_tracked = options.tracked_states is not None
     num_tracked = len(options.tracked_states) if has_tracked else 0
+    n_workers = getattr(options, "n_workers", 1)
+
+    num_workers = os.cpu_count() or 1 if n_workers == -1 else int(n_workers)
+    _warn_memory_headroom(num_workers)
 
     res = Result(
         metadata=None,  # Populated by BranchAnalysis.run
@@ -290,15 +359,33 @@ def shirley_branch_analysis(
         else None
     )
 
-    for i, drive_freq in enumerate(tqdm(freq, desc="Branch Analysis", total=len(freq), disable=not show_progress)):
-        quasienergies, excitations, tracked_sambe_states = shirley_single_frequency(
-            circuit, drive_freq, amps, options, cache=cache
-        )
-        res.quasienergies[i] = quasienergies
-        res.observables["avg_excitation"][i] = excitations
-        if has_tracked and tracked_sambe_states is not None:
-            all_states[i] = tracked_sambe_states
-            all_bare[i] = cache.initial_states(drive_freq)[:, options.tracked_states]
+    if num_workers <= 1 or len(freq) <= 1:
+        for i, drive_freq in enumerate(tqdm(freq, desc="Branch Analysis", total=len(freq), disable=not show_progress)):
+            quasienergies, excitations, tracked_sambe_states = shirley_single_frequency(
+                circuit, drive_freq, amps, options, cache=cache
+            )
+            res.quasienergies[i] = quasienergies
+            res.observables["avg_excitation"][i] = excitations
+            if has_tracked and tracked_sambe_states is not None:
+                all_states[i] = tracked_sambe_states
+                all_bare[i] = cache.initial_states(drive_freq)[:, options.tracked_states]
+    else:
+        max_workers = min(num_workers, len(freq))
+        tasks = [
+            (i, circuit, drive_freq, amps, options, cache)
+            for i, drive_freq in enumerate(freq)
+        ]
+        with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp.get_context("spawn"), initializer=_worker_init) as executor:
+            futures = {executor.submit(_shirley_worker_task, task): task[0] for task in tasks}
+            with tqdm(total=len(freq), desc=f"Branch Analysis ({max_workers} workers)", disable=not show_progress) as pbar:
+                for future in as_completed(futures):
+                    f_idx, quasienergies, excitations, tracked_sambe_states, bare_init = future.result()
+                    res.quasienergies[f_idx] = quasienergies
+                    res.observables["avg_excitation"][f_idx] = excitations
+                    if has_tracked and tracked_sambe_states is not None:
+                        all_states[f_idx] = tracked_sambe_states
+                        all_bare[f_idx] = bare_init
+                    pbar.update(1)
 
     if has_tracked and all_states is not None:
         fitter = HybridizationFit(options.fit_cutoff, options.overlap_cutoff)

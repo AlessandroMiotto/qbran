@@ -37,6 +37,11 @@ class Options:
     tracked_states : list of int, optional
         Indices of bare states to track for hybridization analysis. If None, hybridization
         metric is not computed. Default None.
+    backend : str, optional
+        Computation backend: 'numpy' (default) or 'auto'.
+    n_workers : int, optional
+        Number of parallel worker processes for frequency sweeps. Default 1 (sequential).
+        Set to -1 to automatically use all available CPU cores.
     progress_bar : bool, optional
         Whether to display a tqdm progress bar during frequency sweeps. Default True.
     """
@@ -53,6 +58,8 @@ class Options:
         fit_cutoff: int = 4,
         overlap_cutoff: float = 0.8,
         tracked_states: Optional[List[int]] = None,
+        backend: str = "numpy",
+        n_workers: int = 1,
         progress_bar: bool = True,
         **kwargs,
     ):
@@ -66,6 +73,15 @@ class Options:
         self.fit_cutoff = int(fit_cutoff)
         self.overlap_cutoff = float(overlap_cutoff)
         self.tracked_states = list(tracked_states) if tracked_states is not None else None
+
+        valid_backends = {"auto", "numpy"}
+        backend_str = str(backend).lower()
+        if backend_str not in valid_backends:
+            raise ValueError(
+                f"Invalid backend '{backend}'. QBRAN uses optimized multi-core NumPy/SciPy parallelization (choose 'numpy' or 'auto')."
+            )
+        self.backend = "numpy"
+        self.n_workers = int(n_workers)
         self.progress_bar = bool(progress_bar)
 
         for k_arg, v_arg in kwargs.items():
@@ -145,6 +161,8 @@ class BranchAnalysis:
                 "fit_cutoff": self.options.fit_cutoff,
                 "overlap_cutoff": self.options.overlap_cutoff,
                 "tracked_states": self.options.tracked_states,
+                "backend": self.options.backend,
+                "n_workers": self.options.n_workers,
             },
         }
 
