@@ -1,7 +1,7 @@
 """Circuit subsystem entities: Transmon and Resonator."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Union
+from typing import Dict, Any, Union, Optional
 import numpy as np
 import scipy.sparse as sp
 
@@ -49,10 +49,14 @@ class Transmon(Component):
 
     Parameters
     ----------
-    EJ : float
-        Josephson energy in GHz.
-    EC : float
-        Charging energy in GHz.
+    EJ : float, optional
+        Josephson energy in GHz. Can be omitted (None) when creating an uninitialized
+        transmon whose bare parameters will be fitted via ``circuit.fit_parameters(...)``.
+        Default is None.
+    EC : float, optional
+        Charging energy in GHz. Can be omitted (None) when creating an uninitialized
+        transmon whose bare parameters will be fitted via ``circuit.fit_parameters(...)``,
+        or pre-fixed when only fitting EJ. Default is None.
     ng : float, optional
         Offset charge in units of Cooper pairs. Default is 0.
     ncut : int, optional
@@ -65,21 +69,50 @@ class Transmon(Component):
 
     def __init__(
         self,
-        EJ: float,
-        EC: float,
+        EJ: Optional[float] = None,
+        EC: Optional[float] = None,
         ng: float = 0.0,
         ncut: int = 31,
         truncated_dim: int = 13,
         name: str = "Transmon",
     ):
         super().__init__(name=name, truncated_dim=truncated_dim)
-        self.EJ = float(EJ)
-        self.EC = float(EC)
+        self.EJ = float(EJ) if EJ is not None else None
+        self.EC = float(EC) if EC is not None else None
         self.ng = float(ng)
         self.ncut = int(ncut)
         self.charge_dim = 2 * self.ncut + 1
 
-        self._diagonalize()
+        self.evals = None
+        self._all_evals = None
+        self._evecs = None
+        self._n_eig = None
+        self._cos_phi_eig = None
+        self._sin_phi_eig = None
+
+        if self.EJ is not None and self.EC is not None:
+            self._diagonalize()
+
+    @property
+    def is_initialized(self) -> bool:
+        """Whether all bare physical parameters (EJ, EC) are initialized."""
+        return self.EJ is not None and self.EC is not None
+
+    def set_parameters(
+        self,
+        EJ: Optional[float] = None,
+        EC: Optional[float] = None,
+        ng: Optional[float] = None,
+    ):
+        """Update bare physical parameters and re-diagonalize the charge Hamiltonian."""
+        if EJ is not None:
+            self.EJ = float(EJ)
+        if EC is not None:
+            self.EC = float(EC)
+        if ng is not None:
+            self.ng = float(ng)
+        if self.EJ is not None and self.EC is not None:
+            self._diagonalize()
 
     def _diagonalize(self):
         """Diagonalize the transmon Hamiltonian in the charge basis."""
@@ -112,35 +145,52 @@ class Transmon(Component):
     @property
     def wp(self) -> float:
         """Plasma frequency of the transmon wp = sqrt(8 * E_J * E_C)."""
+        if not self.is_initialized:
+            raise ValueError(f"Transmon '{self.name}' has uninitialized parameters (EJ={self.EJ}, EC={self.EC}).")
         return float(np.sqrt(8.0 * self.EJ * self.EC))
 
     @property
     def anharmonicity(self) -> float:
         """Qubit anharmonicity alpha = (E2 - E1) - (E1 - E0)."""
+        if not self.is_initialized:
+            raise ValueError(f"Transmon '{self.name}' has uninitialized parameters (EJ={self.EJ}, EC={self.EC}).")
         return float((self.evals[2] - self.evals[1]) - (self.evals[1] - self.evals[0]))
 
     @property
     def E01(self) -> float:
         """Transition energy E01 = E1 - E0."""
+        if not self.is_initialized:
+            raise ValueError(f"Transmon '{self.name}' has uninitialized parameters (EJ={self.EJ}, EC={self.EC}).")
         return float(self.evals[1] - self.evals[0])
 
     @property
     def n_operator(self) -> np.ndarray:
         """Charge number operator in the truncated eigenbasis."""
+        if not self.is_initialized:
+            raise ValueError(f"Transmon '{self.name}' has uninitialized parameters (EJ={self.EJ}, EC={self.EC}).")
         return self._n_eig
 
     @property
     def cos_phi_operator(self) -> np.ndarray:
         """Cosine of phase operator in the truncated eigenbasis."""
+        if not self.is_initialized:
+            raise ValueError(f"Transmon '{self.name}' has uninitialized parameters (EJ={self.EJ}, EC={self.EC}).")
         return self._cos_phi_eig
 
     @property
     def sin_phi_operator(self) -> np.ndarray:
         """Sine of phase operator in the truncated eigenbasis."""
+        if not self.is_initialized:
+            raise ValueError(f"Transmon '{self.name}' has uninitialized parameters (EJ={self.EJ}, EC={self.EC}).")
         return self._sin_phi_eig
 
     def bare_hamiltonian(self, sparse: bool = False) -> Union[np.ndarray, sp.csr_matrix]:
         """Return the bare Hamiltonian of the transmon in the truncated eigenbasis."""
+        if not self.is_initialized:
+            raise ValueError(
+                f"Transmon '{self.name}' has uninitialized parameters (EJ={self.EJ}, EC={self.EC}). "
+                "Run fit_parameters() or provide EJ and EC before simulating."
+            )
         diag = self.evals - self.evals[0]
         if sparse:
             return sp.diags(diag, 0, format='csr', dtype=np.float64)
@@ -152,9 +202,9 @@ class Transmon(Component):
             "EC": self.EC,
             "ng": self.ng,
             "ncut": self.ncut,
-            "wp": self.wp,
-            "E01": self.E01,
-            "anharmonicity": self.anharmonicity,
+            "wp": self.wp if self.is_initialized else None,
+            "E01": self.E01 if self.is_initialized else None,
+            "anharmonicity": self.anharmonicity if self.is_initialized else None,
         }
 
 
@@ -166,19 +216,35 @@ class Resonator(Component):
 
     Parameters
     ----------
-    E_osc : float
-        Resonator fundamental frequency in GHz.
+    E_osc : float, optional
+        Resonator fundamental bare frequency in GHz. Can be omitted (None) when creating
+        an uninitialized resonator whose bare frequency will be fitted via
+        ``circuit.fit_parameters(...)``. Default is None.
     truncated_dim : int, optional
         Fock space cutoff, default is 13.
     name : str, optional
         Name of the component. Default is "Resonator".
     """
 
-    def __init__(self, E_osc: float, truncated_dim: int = 13, name: str = "Resonator"):
+    def __init__(self, E_osc: Optional[float] = None, truncated_dim: int = 13, name: str = "Resonator"):
         super().__init__(name=name, truncated_dim=truncated_dim)
+        self.E_osc = float(E_osc) if E_osc is not None else None
+
+    @property
+    def is_initialized(self) -> bool:
+        """Whether bare resonator frequency E_osc is initialized."""
+        return self.E_osc is not None
+
+    def set_parameters(self, E_osc: float):
+        """Update resonator bare frequency."""
         self.E_osc = float(E_osc)
 
     def bare_hamiltonian(self, sparse: bool = False) -> Union[np.ndarray, sp.csr_matrix]:
+        if not self.is_initialized:
+            raise ValueError(
+                f"Resonator '{self.name}' has uninitialized parameter E_osc=None. "
+                "Run fit_parameters() or provide E_osc before simulating."
+            )
         diag = self.E_osc * np.arange(self.truncated_dim, dtype=np.float64)
         if sparse:
             return sp.diags(diag, 0, format="csr", dtype=np.float64)

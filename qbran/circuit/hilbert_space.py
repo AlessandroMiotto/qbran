@@ -1,6 +1,6 @@
 """Joint Hilbert space of the circuit."""
 
-from typing import Any, List, Optional, Tuple, Union, Dict
+from typing import Any, List, Optional, Tuple, Union, Dict, TYPE_CHECKING
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -13,6 +13,9 @@ from qbran.core.gauge import (
     apply_gauge_to_operator,
     is_strictly_real,
 )
+
+if TYPE_CHECKING:
+    from qbran.circuit.fitter import FitResult
 
 
 class HilbertSpace:
@@ -60,8 +63,32 @@ class HilbertSpace:
         Accepts flexible signatures:
             add_interaction(component1, component2, g=0.12, kind='capacitive')
             add_interaction(component1, component2, 0.12)
+            add_interaction(component1, component2)  # uninitialized g for fitting
             add_interaction(g=0.12, component1=tmon, component2=res)
             add_interaction(0.12, tmon, res)
+
+        Parameters
+        ----------
+        *args :
+            Flexible positional arguments: components (Component instances), coupling g (float),
+            or kind (str).
+        g : float, optional
+            Coupling strength in GHz. If omitted (None), the interaction is created with
+            uninitialized coupling to be fitted from target dispersive shifts via
+            ``circuit.fit_parameters(...)``. Default is None.
+        component1, component2 : Component, optional
+            Interacting subsystems.
+        kind : str, optional
+            Type of interaction: 'capacitive', 'inductive', or 'custom'. Default is 'capacitive'.
+        real_gauge : bool, optional
+            Whether to express interaction in the real-symmetric gauge. Default is True.
+        op1, op2 : np.ndarray, optional
+            Custom interaction operators for component1 and component2 if kind is 'custom'.
+
+        Returns
+        -------
+        Interaction
+            The instantiated Interaction object added to this HilbertSpace.
         """
         g_val = kwargs.get('g', None)
         c1 = kwargs.get('component1', kwargs.get('c1', None))
@@ -86,18 +113,16 @@ class HilbertSpace:
             c1 = comps.pop(0)
         if c2 is None and len(comps) > 0:
             c2 = comps.pop(0)
-        if g_val is None and len(nums) > 0:
-            g_val = nums.pop(0)
-
-        if c1 is None or c2 is None or g_val is None:
+        if c1 is None or c2 is None:
             raise ValueError(
-                f"add_interaction requires coupling strength g and two components. Got: c1={c1}, c2={c2}, g={g_val}"
+                f"add_interaction requires two components. Got: c1={c1}, c2={c2}"
             )
 
+        g = float(g_val) if g_val is not None else None
         inter = Interaction(
-            g=float(g_val),
             component1=c1,
             component2=c2,
+            g=g,
             kind=kind,
             real_gauge=real_gauge,
             op1=op1,
@@ -323,3 +348,90 @@ class HilbertSpace:
 
     # Backward compatibility alias
     BranchAnalysis = branch_analysis
+
+    def fit_parameters(
+        self,
+        target_frequencies: Optional[Dict[Union[str, Component], Union[float, Tuple[float, float]]]] = None,
+        target_dispersive_shifts: Optional[Dict[Tuple[Union[str, Component], Union[str, Component]], float]] = None,
+        target_anharmonicities: Optional[Dict[Union[str, Component], float]] = None,
+        fixed_parameters: Optional[Dict[str, float]] = None,
+        in_place: bool = True,
+        xtol: float = 1e-8,
+        ftol: float = 1e-8,
+        max_nfev: int = 150,
+    ) -> "FitResult":
+        """Fit bare circuit parameters to match target dressed experimental observables.
+
+        Parameters
+        ----------
+        target_frequencies : dict, optional
+            Target dressed frequencies in GHz. Keys can be component names (str) or Component instances.
+            Values can be:
+            - float: target fundamental frequency (0 -> 1 transition) in GHz.
+            - tuple (freq, alpha): for Transmon components, specifies both the 0 -> 1 frequency
+              and the anharmonicity.
+        target_dispersive_shifts : dict, optional
+            Target cross-Kerr dispersive shifts in GHz. Keys are 2-tuples of components (names or instances).
+            Dispersive shift is defined as:
+                chi_ij = E(1_i, 1_j) - E(1_i, 0_j) - E(0_i, 1_j) + E(0_i, 0_j)
+        target_anharmonicities : dict, optional
+            Target transmon anharmonicities (self-Kerr) in GHz.
+            Anharmonicity is defined as:
+                alpha = E_12 - E_01
+            (Note: can also be passed directly in ``target_frequencies`` as ``(freq, alpha)``).
+        fixed_parameters : dict, optional
+            Dictionary of bare parameters to keep fixed during the fit.
+        in_place : bool, optional
+            Whether to update the bare parameters on this circuit and its components/interactions
+            in-place. Default is True.
+        xtol : float, optional
+            Relative error desired in the approximate solution. Default is 1e-8.
+        ftol : float, optional
+            Relative error desired in the objective sum of squares. Default is 1e-8.
+        max_nfev : int, optional
+            Maximum number of function evaluations for the optimizer. Default is 150.
+
+        Returns
+        -------
+        FitResult
+            Container with convergence diagnostics, bare parameters, and target vs fitted observables:
+            - ``result.bare_parameters``: converged bare values (EJ, EC, E_osc, g)
+            - ``result.summary()``: formatted ASCII diagnostic table
+            - ``result.max_residual_mhz``: maximum discrepancy across all observables in MHz
+            - ``result.success``: boolean flag indicating optimizer convergence
+
+        Examples
+        --------
+        >>> import qbran as br
+        >>> # Define uninitialized components (no bare parameters needed upfront)
+        >>> tmon = br.Transmon(truncated_dim=10, name="tmon")
+        >>> res = br.Resonator(truncated_dim=10, name="res")
+        >>> circuit = br.HilbertSpace([tmon, res])
+        >>> circuit.add_interaction(tmon, res)
+        >>>
+        >>> # Fit bare parameters to experimental dressed observables
+        >>> res = circuit.fit_parameters(
+        ...     target_frequencies={
+        ...         tmon: (4.50, -0.25),  # 4.5 GHz freq, -250 MHz anharmonicity
+        ...         res: 7.20,            # 7.2 GHz resonator freq
+        ...     },
+        ...     target_dispersive_shifts={
+        ...         (tmon, res): -0.002,  # -2 MHz dispersive shift (or 0.002)
+        ...     },
+        ... )
+        >>> print(res.summary())
+        >>> print(res.bare_parameters)
+        """
+        from qbran.circuit.fitter import fit_parameters as _fit_parameters
+
+        return _fit_parameters(
+            circuit=self,
+            target_frequencies=target_frequencies,
+            target_dispersive_shifts=target_dispersive_shifts,
+            target_anharmonicities=target_anharmonicities,
+            fixed_parameters=fixed_parameters,
+            in_place=in_place,
+            xtol=xtol,
+            ftol=ftol,
+            max_nfev=max_nfev,
+        )
