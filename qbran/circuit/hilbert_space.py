@@ -16,6 +16,8 @@ from qbran.core.gauge import (
 
 if TYPE_CHECKING:
     from qbran.circuit.fitter import FitResult
+    from qbran.analysis.sweep import SweepResult
+    from qbran.analysis.analysis import Options
 
 
 class HilbertSpace:
@@ -435,3 +437,85 @@ class HilbertSpace:
             ftol=ftol,
             max_nfev=max_nfev,
         )
+
+    def sweep(
+        self,
+        parameters: Optional[Dict[Any, Union[List[float], np.ndarray]]] = None,
+        drive_freq: Optional[Union[float, List[float], np.ndarray]] = None,
+        drive_amp: Optional[Union[float, List[float], np.ndarray]] = None,
+        kind: str = "shirley",
+        options: Optional[Any] = None,
+        n_amp_steps: int = 15,
+        **kwargs,
+    ) -> "SweepResult":
+        """Run multidimensional parameter sweep over circuit parameters and drive axes.
+
+        Sweeps arbitrary circuit parameters (e.g. resonator frequencies, transmon charge bias,
+        interaction couplings) and drive axes (frequency, amplitude), assembling the resulting
+        quasienergies and Xiao hybridization metrics into a multidimensional SweepResult.
+
+        Circuit parameters are snapshotted beforehand and guaranteed to be restored upon completion.
+
+        Parameters
+        ----------
+        parameters : dict, optional
+            Dictionary mapping parameter identifiers to 1D arrays or lists of values.
+            Supported key formats:
+            - Dot-notation: ``{"buffer.E_osc": np.linspace(7.35, 7.55, 41)}``
+            - Transmon bias: ``{"tmon.ng": np.linspace(0.0, 1.0, 51)}``
+            - Component tuples: ``{(buffer, "E_osc"): np.linspace(7.3, 7.5, 20)}``
+            - Interaction coupling: ``{(tmon, buffer): np.linspace(0.05, 0.15, 10)}``
+        drive_freq : float, list, or ndarray
+            Drive frequency (or frequencies) in GHz.
+        drive_amp : float, list, or ndarray
+            Drive amplitude (or amplitudes).
+            - Scalar (e.g. ``drive_amp=0.2``): Automatically simulates an internal compact
+              amplitude ramp from 0 to drive_amp to ensure valid Xiao diabatic tracking,
+              and returns the extracted slice at drive_amp with the amplitude axis squeezed out.
+            - 1D Array (e.g. ``drive_amp=np.linspace(0, 0.4, 20)``): Retains the full amplitude axis.
+        kind : str, optional
+            Floquet simulation framework: 'shirley' (default) or 'propagator'.
+        options : Options, optional
+            Simulation and parallelization options (e.g. ``Options(n_workers=8, tracked_states=[...])``).
+        n_amp_steps : int, optional
+            Number of amplitude ramp steps when drive_amp is scalar. Default is 15.
+
+        Returns
+        -------
+        SweepResult
+            Multidimensional dataset container:
+            - ``res.hybridization``: N-D array of shape ``(*param_dims, *drive_dims, n_tracked)``
+            - ``res.quasienergies``: N-D array of shape ``(*param_dims, *drive_dims, k)``
+            - ``res.coords``: Dictionary of 1D coordinate arrays for each dimension
+            - ``res.slice(**kwargs)``: Helper method to extract 2D/1D slices by coordinate value
+            - ``res.save("sweep.h5")``: Export to HDF5 archive
+
+        Examples
+        --------
+        >>> # 2D plane sweep: SMPD pump frequency vs buffer frequency at fixed pump amplitude
+        >>> sweep_res = circuit.sweep(
+        ...     parameters={"buffer.E_osc": np.linspace(7.35, 7.55, 41)},
+        ...     drive_freq=np.linspace(6.30, 6.40, 101),
+        ...     drive_amp=0.2,       # scalar: auto-ramps & extracts slice at 0.2
+        ...     options=ops,
+        ... )
+        >>> # Plot 2D heatmap directly (tracked state index 2):
+        >>> plt.pcolormesh(
+        ...     sweep_res.coords["drive_freq"],
+        ...     sweep_res.coords["buffer.E_osc"],
+        ...     sweep_res.hybridization[:, :, 2],
+        ... )
+        """
+        from qbran.analysis.sweep import ParameterSweep
+
+        sweep_runner = ParameterSweep(
+            circuit=self,
+            parameters=parameters,
+            drive_freq=drive_freq,
+            drive_amp=drive_amp,
+            kind=kind,
+            options=options,
+            n_amp_steps=n_amp_steps,
+            **kwargs,
+        )
+        return sweep_runner.run()
