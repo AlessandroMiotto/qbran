@@ -388,7 +388,11 @@ def shirley_branch_analysis(
                     pbar.update(1)
 
     if has_tracked and all_states is not None:
-        fitter = HybridizationFit(options.fit_cutoff, options.overlap_cutoff)
+        fitter = HybridizationFit(
+            fit_cutoff=options.fit_cutoff,
+            overlap_cutoff=options.overlap_cutoff,
+            fit_range_fraction=getattr(options, "fit_range_fraction", 1.0),
+        )
         res.hybridization = fitter.compute_hybridization(freq, amps, all_states, all_bare)
 
     return res

@@ -34,6 +34,12 @@ class Options:
         Maximum polynomial order for hybridization fitting. Default 4.
     overlap_cutoff : float, optional
         Minimum overlap threshold for resonance masking in hybridization fitting. Default 0.8.
+    fit_range_fraction : float, optional
+        Fraction of the amplitude range to sweep over before updating the reference state
+        to that of the fitted state from the previous window (iterative fitting window).
+        Default is 1.0 (indicating a single global window). Must satisfy 0 < fit_range_fraction <= 1.0.
+    fit_window : float, optional
+        Alias for fit_range_fraction.
     tracked_states : list of int, optional
         Indices of bare states to track for hybridization analysis. If None, hybridization
         metric is not computed. Default None.
@@ -57,6 +63,8 @@ class Options:
         hybridization: str = "fit",
         fit_cutoff: int = 4,
         overlap_cutoff: float = 0.8,
+        fit_range_fraction: float = 1.0,
+        fit_window: Optional[float] = None,
         tracked_states: Optional[List[int]] = None,
         backend: str = "numpy",
         n_workers: int = 1,
@@ -72,6 +80,13 @@ class Options:
         self.hybridization = str(hybridization).lower()
         self.fit_cutoff = int(fit_cutoff)
         self.overlap_cutoff = float(overlap_cutoff)
+
+        frac_val = float(fit_window if fit_window is not None else fit_range_fraction)
+        if not (0.0 < frac_val <= 1.0):
+            raise ValueError(f"fit_range_fraction must be in (0, 1], got {frac_val}")
+        self.fit_range_fraction = frac_val
+        self.fit_window = frac_val
+
         self.tracked_states = list(tracked_states) if tracked_states is not None else None
 
         valid_backends = {"auto", "numpy"}
@@ -96,7 +111,7 @@ class BranchAnalysis:
     circuit : Any
         Circuit Hilbert space.
     kind : str, optional
-        Simulation framework: 'shirley' (default) or 'propagator'.
+        Simulation framework: 'shirley' or 'propagator' (default).
     options : Options, optional
         Configuration options for the simulation.
     """
@@ -104,7 +119,7 @@ class BranchAnalysis:
     def __init__(
         self,
         circuit: Any,
-        kind: str = "shirley",
+        kind: str = "propagator",
         options: Optional[Options] = None,
         **kwargs,
     ):
@@ -160,6 +175,7 @@ class BranchAnalysis:
                 "drive_idx": self.options.drive_idx,
                 "fit_cutoff": self.options.fit_cutoff,
                 "overlap_cutoff": self.options.overlap_cutoff,
+                "fit_range_fraction": self.options.fit_range_fraction,
                 "tracked_states": self.options.tracked_states,
                 "backend": self.options.backend,
                 "n_workers": self.options.n_workers,

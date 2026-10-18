@@ -2,6 +2,7 @@
 
 import os
 import json
+import copy
 import itertools
 from typing import Dict, List, Tuple, Optional, Union, Any
 import multiprocessing as mp
@@ -426,11 +427,12 @@ def _sweep_worker_task(args: Tuple) -> Tuple[int, np.ndarray, Optional[np.ndarra
     # Apply configuration to worker's local circuit copy
     _apply_circuit_parameters(circuit, config_dict)
 
-    # Disable sub-process spawning in workers
-    options.n_workers = 1
-    options.progress_bar = False
+    # Disable sub-process spawning and inner progress bars in workers
+    worker_options = copy.copy(options)
+    worker_options.n_workers = 1
+    worker_options.progress_bar = False
 
-    analysis = circuit.BranchAnalysis(kind=kind, options=options)
+    analysis = circuit.BranchAnalysis(kind=kind, options=worker_options)
     res = analysis.run(drive_freq=freq_arr, drive_amp=actual_amps)
 
     if is_amp_scalar:
@@ -609,9 +611,13 @@ class ParameterSweep:
                 desc="Parameter Sweep",
                 disable=not show_progress or self.total_configs <= 1,
             )
+            inner_options = copy.copy(self.options)
+            if self.total_configs > 1:
+                inner_options.progress_bar = False
+
             for idx, cfg in enumerate(config_dicts):
                 _apply_circuit_parameters(self.circuit, cfg)
-                analysis = self.circuit.BranchAnalysis(kind=self.kind, options=self.options)
+                analysis = self.circuit.BranchAnalysis(kind=self.kind, options=inner_options)
                 raw_res = analysis.run(drive_freq=self.freq_arr, drive_amp=self.actual_amps)
 
                 if self.is_amp_scalar:

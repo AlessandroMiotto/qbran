@@ -332,7 +332,11 @@ def propagator_branch_analysis(
 
     if has_tracked and all_states is not None:
         bare_states = static_cache.init_evecs[:, options.tracked_states]
-        fitter = HybridizationFit(fit_cutoff=options.fit_cutoff, overlap_cutoff=options.overlap_cutoff)
+        fitter = HybridizationFit(
+            fit_cutoff=options.fit_cutoff,
+            overlap_cutoff=options.overlap_cutoff,
+            fit_range_fraction=getattr(options, "fit_range_fraction", 1.0),
+        )
         res.hybridization = fitter.compute_hybridization(freq, amps, all_states, bare_states)
 
     return res
