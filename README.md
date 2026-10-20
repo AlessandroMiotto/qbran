@@ -38,7 +38,7 @@ circuit.add_interaction(tmon, res, g=0.153)
 # 3. Specify drive frequencies and amplitudes
 # H_d(t) = Ω_d * cos(ω_d t) * ̂n
 freq_drive = np.linspace(10.2, 11.4, 100)
-amps_drive  = np.linspace(   0,  5.2, 100)
+amps_drive = np.linspace(   0,  5.2, 100)
 
 # 4. Perform branch analysis using propagator time integration
 opt = br.Options(n_workers=4)
@@ -60,7 +60,7 @@ Additional tutorial notebooks are available in [`examples/`](./examples):
 
 ## References
 
-* M. F. Dumas, B. Groleau-Paré, A. McDonald, M. H. Muñoz-Arias, C. Lledó, B. D'Anjou, and A. Blais, *"Measurement-induced transmon ionization"*, [Phys. Rev. X **14**, 041023 (2024)](https://doi.org/10.1103/PhysRevX.14.041023).
+* M. F. Dumas, B. Groleau-Paré, A. McDonald, M. H. Muñoz-Arias, C. Lledó, B. D'Anjou, and A. Blais, *"Measurement-induced transmon ionization"*, [Phys. Rev. X **14**, 041023 (2024)](https://doi.org/10.1103/PhysRevX.14.041023) (arXiv:2402.06615).
 * X. Xiao, J. Venkatraman, R. G. Cortiñas, S. Chowdhury, and M. H. Devoret, *"A diagrammatic method to compute the effective Hamiltonian of driven nonlinear oscillators"*, [PRX Quantum **4**, 040337 (2023)](https://doi.org/10.1103/PRXQuantum.4.040337) (arXiv:2304.13656).
-* W. Dai, S. Hazra, D. K. Weiss, P. D. Kurilovich, T. Connolly, H. K. Babla, S. Singh, V. R. Joshi, A. Z. Ding, P. D. Parakh, J. Venkatraman, X. Xiao, L. Frunzio, and M. H. Devoret, *"Characterization of Drive-Induced Unwanted State Transitions in Superconducting Circuits"*, [Phys. Rev. X **16**, 011011 (2026)](https://doi.org/10.1103/PhysRevX.16.011011) (arXiv:2506.24070).
+* W. Dai, S. Hazra, D. K. Weiss, P. D. Kurilovich, T. Connolly, H. K. Babla, S. Singh, V. R. Joshi, A. Z. Ding, P. D. Parakh, J. Venkatraman, X. Xiao, L. Frunzio, and M. H. Devoret, *"Characterization of Drive-Induced Unwanted State Transitions in Superconducting Circuits"*, [Phys. Rev. X **16**, 011011 (2026)](https://doi.org/10.1103/zdpg-mhpc) (arXiv:2506.24070).
 * D. K. Weiss, *"Floquet: Identifying nonlinear resonances in quantum systems due to parametric drives"*, GitHub repository: [dkweiss31/floquet](https://github.com/dkweiss31/floquet).
