@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it as below."
+title: "QBrAn: Quantum BRanch ANalysis"
+abstract: "A high-performance Python library for simulating driven superconducting circuits, identifying multi-photon resonances, and analyzing parametric processes."
+version: 0.1.0
+date-released: 2026-10-20
+url: "https://github.com/AlessandroMiotto/qbran"
+repository-code: "https://github.com/AlessandroMiotto/qbran"
+license: MIT
+authors:
+  - family-names: Miotto
+    given-names: Alessandro
+    email: miotto.alessandro2@gmail.com
+keywords:
+  - superconducting-circuits
+  - floquet-theory
+  - transmon
+  - branch-analysis
+  - circuit-qed
